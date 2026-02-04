@@ -73,21 +73,35 @@ def get_unique_lesion_patches(lesmat: np.ndarray,
     add = 1
     summed = np.zeros(n_voxels, dtype=np.int64)
 
-    # Main algorithm (optimized version without dictionary comprehension)
+    # Main algorithm - faithful implementation of R's match() logic
+    # CRITICAL: Must preserve first-occurrence order, not sort unique values
     for i in range(n_subjects):
         # Add weighted current row to cumulative sum
         summed = summed + (lesmat[i, :] * add)
 
-        # Remap to consecutive integers using vectorized search
-        # This is more efficient than dictionary comprehension
-        unique_vals = np.unique(summed)
-        remapped = np.empty_like(summed)
-        for new_val, old_val in enumerate(unique_vals, start=1):
-            remapped[summed == old_val] = new_val
-        summed = remapped
+        # Implement R's match() function: match(summed, unique(summed))
+        # R's unique() preserves first-occurrence order (does NOT sort)
+        # R's match() returns position in unique array
+
+        # Get unique values with their first occurrence indices
+        unique_vals, first_index, inverse = np.unique(
+            summed,
+            return_index=True,
+            return_inverse=True
+        )
+
+        # Sort by first occurrence to preserve R's behavior
+        order = np.argsort(first_index)
+
+        # Create mapping: unique_vals[order] -> 1, 2, 3, ...
+        mapping = np.empty(len(order), dtype=np.int64)
+        mapping[order] = np.arange(1, len(order) + 1)
+
+        # Apply mapping to get match() result
+        summed = mapping[inverse]
 
         # Update add for next iteration
-        add = summed.max() + 1
+        add = int(summed.max() + 1)
 
     # Final result is the patch assignment
     patchindx = summed
