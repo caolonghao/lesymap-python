@@ -78,7 +78,8 @@ class LesymapResult:
         self.model_params = kwargs.get('model_params', {})
 
         # SCCAN-specific
-        self.sccan_weights = kwargs.get('sccan_weights')  # Voxel weights
+        self.sccan_weights = kwargs.get('sccan_weights')  # Voxel weights (eig1)
+        self.sccan_eig2 = kwargs.get('sccan_eig2')  # Behavior weights (eig2)
         self.sccan_behavior_scale = kwargs.get('sccan_behavior_scale')
         self.sccan_behavior_center = kwargs.get('sccan_behavior_center')
         self.sccan_lesmat_scale = kwargs.get('sccan_lesmat_scale')
@@ -191,6 +192,7 @@ class LesymapResult:
             'method': self.method,
             # SCCAN components
             'sccan_weights': self.sccan_weights,
+            'sccan_eig2': self.sccan_eig2,
             'sccan_behavior_scale': self.sccan_behavior_scale,
             'sccan_behavior_center': self.sccan_behavior_center,
             'sccan_lesmat_scale': self.sccan_lesmat_scale,
@@ -244,6 +246,7 @@ class LesymapResult:
             mask_img=mask_img,
             method=checkpoint_data['method'],
             sccan_weights=checkpoint_data.get('sccan_weights'),
+            sccan_eig2=checkpoint_data.get('sccan_eig2'),
             sccan_behavior_scale=checkpoint_data.get('sccan_behavior_scale'),
             sccan_behavior_center=checkpoint_data.get('sccan_behavior_center'),
             sccan_lesmat_scale=checkpoint_data.get('sccan_lesmat_scale'),
@@ -300,7 +303,15 @@ class LesymapResult:
             )
 
     def _predict_sccan(self, new_lesions: Union[List[str], List[nib.Nifti1Image]]) -> np.ndarray:
-        """SCCAN prediction with linear calibration."""
+        """
+        SCCAN prediction with linear calibration.
+
+        Implements R's lesymap.predict for SCCAN:
+        1. Scale new lesion data using training parameters
+        2. Compute: predbehav = lesmat @ eig1 @ eig2
+        3. Reverse standardization
+        4. Apply linear calibration model
+        """
         if self.sccan_weights is None:
             raise ValueError("SCCAN weights not available for prediction")
 
@@ -315,16 +326,27 @@ class LesymapResult:
         ])
 
         # Scale lesion matrix using training parameters
+        # R: lesmat_scaled = scale(lesmat, center=old_center, scale=old_scale)
         lesmat_scaled = (lesmat - self.sccan_lesmat_center) / self.sccan_lesmat_scale
 
-        # Compute weighted scores
-        weighted_scores = lesmat_scaled @ self.sccan_weights
+        # Get eig1 (voxel weights) and eig2 (behavior weights)
+        eig1 = self.sccan_weights
+        eig2 = self.sccan_eig2 if self.sccan_eig2 is not None else np.array([1.0])
+
+        # Compute prediction (R: predbehav = lesmat %*% t(sccan$eig1) %*% sccan$eig2)
+        predbehav_scaled = lesmat_scaled @ eig1.reshape(-1, 1) @ eig2.reshape(1, -1)
+        predbehav_scaled = predbehav_scaled.flatten()
+
+        # Reverse standardization
+        # R: predbehav.raw = predbehav * behavior.scale + behavior.center
+        predbehav_raw = predbehav_scaled * self.sccan_behavior_scale + self.sccan_behavior_center
 
         # Apply linear calibration if available
+        # R: predict(lsm$sccan.predictlm, newdata=data.frame(predbehav.raw=predbehav.raw))
         if self.sccan_predict_lm is not None:
-            predictions = self.sccan_predict_lm.predict(weighted_scores.reshape(-1, 1))
+            predictions = self.sccan_predict_lm.predict(predbehav_raw.reshape(-1, 1))
         else:
-            predictions = weighted_scores
+            predictions = predbehav_raw
 
         return predictions
 
