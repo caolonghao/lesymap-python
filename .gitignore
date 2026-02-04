@@ -1,0 +1,17 @@
+# Git worktrees directory
+.worktrees/
+
+# R package build artifacts
+*.o
+*.so
+*.dll
+*.dylib
+*.Rhistory
+*.RData
+*.Rproj.user
+.Rproj.user/
+
+# IDE files
+.DS_Store
+.vscode/
+.idea/

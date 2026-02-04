@@ -6,6 +6,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 LESYMAP is an R package for lesion-symptom mapping analysis in neuroimaging research. It maps brain areas responsible for cognitive deficits by analyzing lesion maps (NIfTI images) and behavioral scores from stroke patients. The package supports both univariate (voxel-wise) and multivariate statistical methods.
 
+## Git Worktrees
+
+This project uses git worktrees for managing multiple branches simultaneously. All worktrees should be created in the `.worktrees/` directory at the project root, which is automatically ignored by git.
+
+**Worktree directory:** `.worktrees/`
+
+**Example usage:**
+```bash
+# Create new worktree for feature branch
+git worktree add .worktrees/feature-name -b feature-name
+
+# List all worktrees
+git worktree list
+
+# Remove worktree when done
+git worktree remove feature-name
+```
+
 ## Build and Installation
 
 ### Installation
