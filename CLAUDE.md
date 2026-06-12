@@ -42,6 +42,35 @@ devtools::install_github('dorianps/LESYMAP')
 
 This installs all dependencies including ANTsR (medical image processing library), which may take up to an hour.
 
+### Docker Installation (Recommended for R/Python Comparison)
+
+A pre-built Docker image with LESYMAP and all dependencies is available:
+
+```bash
+# Pull the Docker image
+docker pull dorianps/lesymap
+
+# Image info:
+# - Repository: dorianps/lesymap
+# - Tag: latest
+# - Size: ~4.06GB
+# - Platform: linux/amd64 (runs on ARM64 with emulation)
+
+# Run R script inside Docker container
+docker run --rm -v $(pwd):/data dorianps/lesymap Rscript /data/your_script.R
+
+# Interactive R session
+docker run --rm -it -v $(pwd):/data dorianps/lesymap R
+
+# Generate reference data for Python validation
+docker run --rm \
+  -v $(pwd)/tests/fixtures/r_reference_results:/data/r_reference_results \
+  -v $(pwd)/tests:/scripts \
+  dorianps/lesymap Rscript /scripts/generate_r_reference.R
+```
+
+**Note:** On Apple Silicon (M1/M2/M3), the image runs under Rosetta emulation with a platform warning, but functions correctly.
+
 ### Building the Package
 The package uses R's standard build system with C++ compilation:
 
@@ -346,7 +375,7 @@ The Python implementation follows a similar pipeline to the R version:
    pandas >= 1.4
    joblib >= 1.2
    tqdm >= 4.64
-
+   
    # Optional
    antspyx >= 0.3.6     # For SCCAN method
    ```

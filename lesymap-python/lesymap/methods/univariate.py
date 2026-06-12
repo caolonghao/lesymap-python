@@ -418,10 +418,6 @@ def lsm_chisq(lesmat: np.ndarray,
     if show_info:
         print("  Running chi-square test...")
 
-    n_voxels = lesmat.shape[1]
-    statistic = np.zeros(n_voxels)
-    pvals = np.zeros(n_voxels)
-
     # Check if behavior is binary
     unique_vals = np.unique(behavior)
     if len(unique_vals) > 2:
@@ -431,26 +427,28 @@ def lsm_chisq(lesmat: np.ndarray,
         )
         behavior = (behavior > np.median(behavior)).astype(int)
 
-    for vox in range(n_voxels):
-        # Create contingency table
-        # Rows: lesion=0, lesion=1
-        # Cols: behavior=0, behavior=1
-        table = np.zeros((2, 2), dtype=int)
+    b = behavior.astype(np.int64)
+    les = (lesmat > 0).astype(np.int64)
 
-        for les, beh in zip(lesmat[:, vox], behavior):
-            les_idx = 0 if les == 0 else 1
-            beh_idx = 0 if beh == 0 else 1
-            table[les_idx, beh_idx] += 1
+    # Vectorized 2×2 contingency table cells for all voxels at once
+    n11 = les.T @ b            # les=1, beh=1  (n_voxels,)
+    n10 = les.T @ (1 - b)     # les=1, beh=0
+    n01 = (1 - les).T @ b     # les=0, beh=1
+    n00 = (1 - les).T @ (1 - b)  # les=0, beh=0
 
-        # Chi-square test
-        try:
-            stat, p = stats.chi2_contingency(table, correction=False)[:2]
-            statistic[vox] = stat
-            pvals[vox] = p
-        except ValueError:
-            # Handle edge cases (e.g., zero expected counts)
-            statistic[vox] = 0
-            pvals[vox] = 1.0
+    R1 = n11 + n10  # row marginal: les=1
+    R0 = n01 + n00  # row marginal: les=0
+    C1 = n11 + n01  # col marginal: beh=1
+    C0 = n10 + n00  # col marginal: beh=0
+
+    n_subjects = lesmat.shape[0]
+    denom = R1.astype(np.float64) * R0 * C1 * C0
+    statistic = np.where(
+        denom > 0,
+        n_subjects * (n11.astype(np.float64) * n00 - n10.astype(np.float64) * n01) ** 2 / denom,
+        0.0
+    )
+    pvals = stats.chi2.sf(statistic, df=1)
 
     # Map back to voxel space if using patches
     if patchinfo is not None and 'patchindx' in patchinfo:

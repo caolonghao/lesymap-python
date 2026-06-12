@@ -75,7 +75,8 @@ def correct_pvalues(pvals: np.ndarray,
 
 def fwer_permutation_threshold(stat_func: Callable,
                                nperm: int = 1000,
-                               alpha: float = 0.95) -> float:
+                               alpha: float = 0.95,
+                               n_jobs: int = 1) -> float:
     """
     Compute family-wise error rate threshold via permutation.
 
@@ -87,33 +88,25 @@ def fwer_permutation_threshold(stat_func: Callable,
         Number of permutations
     alpha : float
         Percentile for threshold (default 0.95 = 5% FWER)
+    n_jobs : int
+        Number of parallel jobs (default 1 = serial). Use -1 for all cores.
+        Uses threading backend (safe with Numba-compiled stat_func).
 
     Returns
     -------
     float
         Threshold value at the specified percentile
-
-    Notes
-    -----
-    This function runs the statistical test on permuted data and
-    records the maximum absolute statistic each time. The threshold
-    is set at the percentile of these maximum values.
-
-    Examples
-    --------
-    >>> def my_test():
-    ...     return run_bm_test(lesmat, np.random.permutation(behavior))
-    >>> threshold = fwer_permutation_threshold(my_test, nperm=1000)
     """
-    max_stats = np.zeros(nperm)
+    from joblib import Parallel, delayed
 
-    for i in range(nperm):
-        stat = stat_func()
-        max_stats[i] = np.max(np.abs(stat))
+    def _one_perm(_):
+        return float(np.max(np.abs(stat_func())))
 
-    threshold = np.percentile(max_stats, alpha * 100)
+    max_stats = Parallel(n_jobs=n_jobs, prefer='threads')(
+        delayed(_one_perm)(i) for i in range(nperm)
+    )
 
-    return threshold
+    return float(np.percentile(max_stats, alpha * 100))
 
 
 def cluster_permutation_threshold(stat_img: np.ndarray,
@@ -221,10 +214,8 @@ def compute_fdr(pvals: np.ndarray,
     else:
         raise ValueError(f"Unknown FDR method: {method}")
 
-    # Enforce monotonicity
-    for i in range(n - 2, -1, -1):
-        if adj_pvals[i] > adj_pvals[i + 1]:
-            adj_pvals[i] = adj_pvals[i + 1]
+    # Enforce monotonicity: each adjusted p-value ≤ the next larger one
+    adj_pvals = np.minimum.accumulate(adj_pvals[::-1])[::-1]
 
     # Cap at 1
     adj_pvals = np.minimum(adj_pvals, 1.0)

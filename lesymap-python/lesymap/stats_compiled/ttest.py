@@ -9,6 +9,24 @@ from numba import njit, prange
 from typing import Tuple
 
 
+@njit(cache=True)
+def _sample_variance(arr: np.ndarray) -> float:
+    """
+    Compute sample variance with ddof=1 (Numba-compatible).
+
+    This is equivalent to np.var(arr, ddof=1) but works in Numba nopython mode.
+    """
+    n = len(arr)
+    if n <= 1:
+        return 0.0
+    mean = np.mean(arr)
+    ss = 0.0
+    for i in range(n):
+        diff = arr[i] - mean
+        ss += diff * diff
+    return ss / (n - 1.0)
+
+
 @njit(parallel=True, cache=True)
 def ttest_fast(X: np.ndarray,
                y: np.ndarray,
@@ -77,8 +95,8 @@ def ttest_fast(X: np.ndarray,
         mean1 = np.mean(y1)
 
         # Compute variances (sample variance, n-1 denominator)
-        var0 = np.var(y0, ddof=1) if n0 > 1 else 0.0
-        var1 = np.var(y1, ddof=1) if n1 > 1 else 0.0
+        var0 = _sample_variance(y0)
+        var1 = _sample_variance(y1)
 
         # Pooled variance (weighted by n-1)
         var_pooled = ((var0 * (n0 - 1.0)) + (var1 * (n1 - 1.0))) / (n_subjects - 2.0)
@@ -159,8 +177,8 @@ def welch_fast(X: np.ndarray,
         mean1 = np.mean(y1)
 
         # Compute variances
-        var0 = np.var(y0, ddof=1) if n0 > 1 else 0.0
-        var1 = np.var(y1, ddof=1) if n1 > 1 else 0.0
+        var0 = _sample_variance(y0)
+        var1 = _sample_variance(y1)
 
         # Welch statistic
         se = np.sqrt(var0 / n0 + var1 / n1)

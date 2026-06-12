@@ -174,6 +174,8 @@ def _has_duplicates(values: np.ndarray) -> bool:
     """
     Check if array has duplicate values (JIT-compatible).
 
+    Uses O(n log n) sort + adjacent-compare instead of O(n²) nested loop.
+
     Parameters
     ----------
     values : ndarray
@@ -184,11 +186,10 @@ def _has_duplicates(values: np.ndarray) -> bool:
     bool
         True if duplicates exist
     """
-    n = len(values)
-    for i in range(n):
-        for j in range(i + 1, n):
-            if values[i] == values[j]:
-                return True
+    sorted_vals = np.sort(values)
+    for i in range(len(sorted_vals) - 1):
+        if sorted_vals[i] == sorted_vals[i + 1]:
+            return True
     return False
 
 

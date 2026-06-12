@@ -63,11 +63,11 @@ def regression_fast(X: np.ndarray,
         # Build design matrix for this voxel
         xmat = _build_design_matrix(X[:, vox], covariates)
 
-        # Solve OLS: (X'X)^-1 X'y
-        coef, resid, sig2 = _solve_ols(xmat, y, kxmat)
+        # Solve OLS: (X'X)^-1 X'y — also returns X'X to reuse below
+        coef, resid, sig2, xt_x = _solve_ols(xmat, y, kxmat)
 
-        # Compute standard errors
-        stderrest = _compute_standard_errors(xmat, sig2, kxmat)
+        # Compute standard errors reusing the already-computed X'X
+        stderrest = _compute_standard_errors(xt_x, sig2)
 
         # t-statistic for first predictor (lesion effect)
         if stderrest[0] > 0:
@@ -76,6 +76,18 @@ def regression_fast(X: np.ndarray,
             statistic[vox] = 0.0
 
     return statistic, n_subjects, kxmat
+
+
+def _solve_ols_with_xtx(X: np.ndarray,
+                        y: np.ndarray,
+                        covariates=None) -> np.ndarray:
+    """
+    Public alias for the optimized regression path (XtX computed once).
+
+    Returns t-statistics shape (n_voxels,) — same as regression_fast(X, y)[0].
+    Exposed for testing purposes.
+    """
+    return regression_fast(X, y, covariates)[0]
 
 
 @njit(cache=True)
@@ -123,7 +135,7 @@ def _build_design_matrix(voxel_data: np.ndarray,
 @njit(cache=True)
 def _solve_ols(xmat: np.ndarray,
               y: np.ndarray,
-              kxmat: int) -> Tuple[np.ndarray, np.ndarray, float]:
+              kxmat: int) -> Tuple[np.ndarray, np.ndarray, float, np.ndarray]:
     """
     Solve OLS regression using normal equations.
 
@@ -144,55 +156,42 @@ def _solve_ols(xmat: np.ndarray,
         Residuals
     sig2 : float
         Residual variance (MSE)
+    xt_x : ndarray, shape (k, k)
+        X'X matrix (returned to avoid recomputing in _compute_standard_errors)
     """
-    # X'X and X'y
     xt_x = xmat.T @ xmat
     xt_y = xmat.T @ y
 
-    # Solve (X'X) * coef = X'y
-    # Use simple LU decomposition via solve
     coef = np.linalg.solve(xt_x, xt_y)
 
-    # Residuals
     y_pred = xmat @ coef
     resid = y - y_pred
 
-    # Residual variance
     n = len(y)
     sig2 = np.sum(resid ** 2) / (n - kxmat)
 
-    return coef, resid, sig2
+    return coef, resid, sig2, xt_x
 
 
 @njit(cache=True)
-def _compute_standard_errors(xmat: np.ndarray,
-                            sig2: float,
-                            kxmat: int) -> np.ndarray:
+def _compute_standard_errors(xt_x: np.ndarray,
+                             sig2: float) -> np.ndarray:
     """
     Compute standard errors of regression coefficients.
 
     Parameters
     ----------
-    xmat : ndarray, shape (n, k)
-        Design matrix
+    xt_x : ndarray, shape (k, k)
+        Pre-computed X'X matrix (avoids redundant computation)
     sig2 : float
         Residual variance
-    kxmat : int
-        Number of predictors
 
     Returns
     -------
     ndarray, shape (k,)
         Standard errors for each coefficient
     """
-    # Inverse of X'X (diagonal only for efficiency)
-    xt_x = xmat.T @ xmat
     xt_x_inv = np.linalg.inv(xt_x)
-
-    # Variance of coefficients: sig2 * diag((X'X)^-1)
     var_coef = sig2 * np.diag(xt_x_inv)
-
-    # Standard errors
     stderrest = np.sqrt(var_coef)
-
     return stderrest

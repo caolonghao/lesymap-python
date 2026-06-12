@@ -120,19 +120,12 @@ def get_unique_lesion_patches(lesmat: np.ndarray,
 
     # Generate patch matrix if requested
     if return_patch_matrix:
-        # For each patch, compute the mean lesion pattern across its voxels
-        # (Since all voxels in a patch have the same pattern, mean = pattern)
-        patchmatrix = np.zeros((n_subjects, npatches))
-
-        for patch_id in range(1, npatches + 1):
-            # Get all voxels in this patch
-            voxel_mask = patchindx == patch_id
-
-            # Get lesion pattern (should be same for all voxels in patch)
-            pattern = lesmat[:, voxel_mask]
-
-            # Use first voxel as representative (all should be identical)
-            patchmatrix[:, patch_id - 1] = pattern[:, 0]
+        # All voxels in a patch share the identical lesion pattern, so we
+        # just need one representative voxel per patch.
+        # np.unique returns sorted unique values; since patchindx is 1..npatches,
+        # first_occ[i] is the first position where patchindx == (i+1).
+        _, first_occ = np.unique(patchindx, return_index=True)
+        patchmatrix = lesmat[:, first_occ]
 
         result['patchmatrix'] = patchmatrix
 
@@ -162,24 +155,18 @@ def patches_to_voxels(statistic: np.ndarray,
     statistic : np.ndarray
         Statistics at patch level (n_patches,)
     patchindx : np.ndarray
-        Patch assignment for each voxel (n_voxels,)
+        Patch assignment for each voxel (n_voxels,), 1-indexed (0 = no patch)
     fill_value : float
-        Value for voxels not in any patch
+        Value for voxels not in any patch (patchindx == 0)
 
     Returns
     -------
     np.ndarray
         Statistics at voxel level (n_voxels,)
     """
-    n_voxels = len(patchindx)
-    voxel_stats = np.full(n_voxels, fill_value, dtype=statistic.dtype)
-
-    # Map patch statistics to voxels
-    npatches = len(statistic)
-    for patch_id in range(1, npatches + 1):
-        voxel_mask = patchindx == patch_id
-        voxel_stats[voxel_mask] = statistic[patch_id - 1]
-
+    voxel_stats = np.full(len(patchindx), fill_value, dtype=statistic.dtype)
+    valid = patchindx > 0
+    voxel_stats[valid] = statistic[patchindx[valid] - 1]
     return voxel_stats
 
 
@@ -257,7 +244,7 @@ def reconstruct_from_patches(patch_values: np.ndarray,
     patch_values : np.ndarray
         Values for each patch (n_patches,)
     patchindx : np.ndarray
-        Patch assignment for each voxel (n_voxels,)
+        Patch assignment for each voxel (n_voxels,), 1-indexed (0 = no patch)
     n_voxels : int
         Total number of voxels
     fill_value : float
@@ -269,8 +256,6 @@ def reconstruct_from_patches(patch_values: np.ndarray,
         Reconstructed voxel array
     """
     reconstructed = np.full(n_voxels, fill_value, dtype=patch_values.dtype)
-
-    for patch_id, value in enumerate(patch_values, start=1):
-        reconstructed[patchindx == patch_id] = value
-
+    valid = patchindx > 0
+    reconstructed[valid] = patch_values[patchindx[valid] - 1]
     return reconstructed
