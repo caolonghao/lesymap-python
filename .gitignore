@@ -34,6 +34,10 @@ env/
 __pycache__/
 .numba_cache/
 
+# Large test fixtures (exceed GitHub 100MB limit)
+tests/fixtures/r_reference_results/svr_lesmat.csv
+tests/fixtures/r_reference_results/svr_lesmat_scaled.csv
+
 # Pytest
 .pytest_cache/
 .coverage
