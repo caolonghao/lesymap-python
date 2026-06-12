@@ -1,7 +1,57 @@
 # Git worktrees directory
 .worktrees/
 
-# R package build artifacts
+# R package (kept locally but not tracked)
+LESYMAP_R_repo/
+lesymap-python/
+
+# Claude Code files
+.claude/
+CLAUDE.md
+
+# macOS
+.DS_Store
+**/.DS_Store
+*.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+.venv/
+venv/
+env/
+.env
+
+# Numba cache
+__pycache__/
+.numba_cache/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# MyPy
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# R build artifacts
 *.o
 *.so
 *.dll
@@ -10,10 +60,3 @@
 *.RData
 *.Rproj.user
 .Rproj.user/
-
-# IDE files
-.DS_Store
-.vscode/
-.idea/
-
-LESYMAP/
