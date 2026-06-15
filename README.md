@@ -111,9 +111,11 @@ If you use this software in research, please cite the original LESYMAP paper:
 
 > Pustina, D., Coslett, H. B., Turkeltaub, P. E., Tustison, N., Schwartz, M. F., & Avants, B. (2016). Automated segmentation of chronic stroke lesions using LINDA: Lesion identification with neighborhood data analysis. *Human Brain Mapping*, 37(4), 1405–1421.
 
-and acknowledge the original R implementation:
+and acknowledge both the original R implementation and this Python port:
 
 > Pustina, D. et al. LESYMAP R package. https://github.com/dorianps/LESYMAP
+
+> LESYMAP-Python. https://github.com/caolonghao/lesymap-python
 
 ## License
 
