@@ -37,6 +37,11 @@ from .core.image_utils import (
     matrix_to_image,
 )
 from .core.patch import get_unique_lesion_patches
+from .core.registration import (
+    register_lesion_to_template,
+    register_batch,
+    get_mni152_template_path,
+)
 from .methods.univariate import (
     lsm_bmfast,
     lsm_ttest,
@@ -57,6 +62,10 @@ from pathlib import Path
 __all__ = [
     # Main function
     'lesymap',
+    # Registration
+    'register_lesion_to_template',
+    'register_batch',
+    'get_mni152_template_path',
     # I/O
     'check_input_type',
     'load_lesions',

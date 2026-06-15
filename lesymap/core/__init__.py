@@ -22,6 +22,7 @@ from .image_utils import (
 from .patch import get_unique_lesion_patches
 from .result import LesymapResult
 from .pipeline import run_lesymap
+from .registration import register_lesion_to_template, register_batch, get_mni152_template_path
 
 __all__ = [
     'check_input_type',
@@ -38,4 +39,7 @@ __all__ = [
     'get_unique_lesion_patches',
     'LesymapResult',
     'run_lesymap',
+    'register_lesion_to_template',
+    'register_batch',
+    'get_mni152_template_path',
 ]

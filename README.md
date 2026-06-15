@@ -6,6 +6,44 @@ LESYMAP identifies brain regions associated with cognitive deficits by analyzing
 
 > **Original R package:** [dorianps/LESYMAP](https://github.com/dorianps/LESYMAP) by Dorian Pustina et al. (Penn Memory Center, University of Pennsylvania)
 
+## Prerequisites: Template Space Registration
+
+LESYMAP requires all lesion maps to be registered to a standard template space (MNI152) before analysis. If your lesion maps are already in MNI space, you can skip this step.
+
+```python
+from lesymap.core.registration import register_lesion_to_template, register_batch
+
+# Single subject
+result = register_lesion_to_template(
+    subject_anatomical='sub-001_T1w.nii.gz',
+    subject_lesion='sub-001_lesion.nii.gz',
+    skull_strip=True,
+    type_of_transform='SyN',       # 'SyNCC' for higher accuracy (~2h)
+    output_prefix='output/sub-001',
+)
+lesion_mni = result['lesion_template']
+
+# Batch
+registered_lesions, _ = register_batch(
+    subject_anatomicals=['sub-001_T1w.nii.gz', 'sub-002_T1w.nii.gz'],
+    subject_lesions=['sub-001_lesion.nii.gz', 'sub-002_lesion.nii.gz'],
+    output_dir='output/registered/',
+)
+```
+
+**Template:** The MNI152 2009c template is not bundled (large file). Download from:
+- [MNI ICBM 152 2009c](https://www.bic.mni.mcgill.ca/~vfonov/icbm/2009/mni_icbm152_nlin_sym_09c_nifti.zip)
+
+Place the three files in `lesymap/data/templates/MNI152_2009c/`:
+```
+mni_icbm152_t1_tal_nlin_sym_09c.nii.gz
+mni_icbm152_t1_tal_nlin_sym_09c_mask.nii.gz
+mni_icbm152_t1_tal_nlin_sym_09c_mask_skullnoface.nii.gz
+```
+Or pass `template=` explicitly. Registration requires ANTsPy (`pip install antspyx`).
+
+See `examples/register_lesions.py` for a full walkthrough.
+
 ## Installation
 
 ```bash
