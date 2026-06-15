@@ -31,16 +31,7 @@ registered_lesions, _ = register_batch(
 )
 ```
 
-**Template:** The MNI152 2009c template is not bundled (large file). Download from:
-- [MNI ICBM 152 2009c](https://www.bic.mni.mcgill.ca/~vfonov/icbm/2009/mni_icbm152_nlin_sym_09c_nifti.zip)
-
-Place the three files in `lesymap/data/templates/MNI152_2009c/`:
-```
-mni_icbm152_t1_tal_nlin_sym_09c.nii.gz
-mni_icbm152_t1_tal_nlin_sym_09c_mask.nii.gz
-mni_icbm152_t1_tal_nlin_sym_09c_mask_skullnoface.nii.gz
-```
-Or pass `template=` explicitly. Registration requires ANTsPy (`pip install antspyx`).
+**Template:** MNI152 2009c templates are stored in this repo via [Git LFS](https://git-lfs.com/) and downloaded automatically with `git clone`. Registration requires ANTsPy (`pip install antspyx`).
 
 See `examples/register_lesions.py` for a full walkthrough.
 
