@@ -128,6 +128,7 @@ def get_unique_lesion_patches(lesmat: np.ndarray,
         patchmatrix = lesmat[:, first_occ]
 
         result['patchmatrix'] = patchmatrix
+        result['patch_representative_indices'] = first_occ
 
     # Print info
     n_subjects_per_patch = np.sum(patchmatrix, axis=0) if 'patchmatrix' in result else None

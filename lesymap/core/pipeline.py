@@ -36,7 +36,7 @@ VALID_METHOD_PARAMS = {
     'sccan': {
         'optimize_sparseness', 'sparseness', 'nvecs', 'cthresh',
         'its', 'smooth', 'cluster_threshold', 'sparseness_range', 'n_jobs',
-        'robust', 'robust_rank_fallback'
+        'robust', 'robust_rank_fallback', 'min_cluster_size'
     },
     'svr': {
         'C', 'kernel', 'epsilon', 'gamma', 'degree', 'coef0', 'n_perm', 'max_features'
@@ -316,10 +316,20 @@ def run_lesymap(lesions,
                 print_info(f"  Filtered {n_filtered} patches below prevalence threshold")
 
             # Update patchinfo for filtered patches
-            # (This is a simplified version - proper implementation would reindex)
             lesmat_for_analysis = patchinfo['patchmatrix'][:, keep_mask]
+            patchinfo['analysis_keep_mask'] = keep_mask
+            patchinfo['analysis_patchmatrix'] = lesmat_for_analysis
+            if 'patch_representative_indices' in patchinfo:
+                patchinfo['analysis_representative_indices'] = (
+                    patchinfo['patch_representative_indices'][keep_mask]
+                )
         else:
             lesmat_for_analysis = patchinfo['patchmatrix']
+            patchinfo['analysis_patchmatrix'] = lesmat_for_analysis
+            if 'patch_representative_indices' in patchinfo:
+                patchinfo['analysis_representative_indices'] = (
+                    patchinfo['patch_representative_indices']
+                )
 
     # Step 5: Lesion size correction
     if correct_by_les_size != 'none':
@@ -346,7 +356,7 @@ def run_lesymap(lesions,
         print_info(f"Running {method} analysis...")
 
     if method == 'sccan':
-        from .methods.multivariate import lsm_sccan
+        from ..methods.multivariate import lsm_sccan
         result = lsm_sccan(
             lesmat_for_analysis,
             behavior,
@@ -359,7 +369,7 @@ def run_lesymap(lesions,
             **kwargs
         )
     elif method == 'svr':
-        from .methods.multivariate import lsm_svr
+        from ..methods.multivariate import lsm_svr
         result = lsm_svr(
             lesmat_for_analysis,
             behavior,
@@ -372,7 +382,7 @@ def run_lesymap(lesions,
             **kwargs
         )
     elif method == 'BMfast':
-        from .methods.univariate import lsm_bmfast
+        from ..methods.univariate import lsm_bmfast
         result = lsm_bmfast(
             lesmat_for_analysis,
             behavior,
@@ -385,7 +395,7 @@ def run_lesymap(lesions,
             **kwargs
         )
     elif method in ['ttest', 'welch']:
-        from .methods.univariate import lsm_ttest, lsm_welch
+        from ..methods.univariate import lsm_ttest, lsm_welch
         if method == 'ttest':
             result = lsm_ttest(
                 lesmat_for_analysis,
@@ -412,7 +422,7 @@ def run_lesymap(lesions,
                 **kwargs
             )
     elif method == 'regresfast':
-        from .methods.univariate import lsm_regresfast
+        from ..methods.univariate import lsm_regresfast
         result = lsm_regresfast(
             lesmat_for_analysis,
             behavior,
@@ -425,7 +435,7 @@ def run_lesymap(lesions,
             **kwargs
         )
     elif method == 'chisq':
-        from .methods.univariate import lsm_chisq
+        from ..methods.univariate import lsm_chisq
         result = lsm_chisq(
             lesmat_for_analysis,
             behavior,

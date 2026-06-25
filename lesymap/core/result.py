@@ -315,15 +315,7 @@ class LesymapResult:
         if self.sccan_weights is None:
             raise ValueError("SCCAN weights not available for prediction")
 
-        # Load lesions and convert to matrix
-        mask_data = self.mask_img.get_fdata()
-        voxel_indices = np.where(mask_data > 0)
-
-        # Build lesion matrix for new subjects
-        lesmat = np.array([
-            self._load_and_extract(img, voxel_indices)
-            for img in new_lesions
-        ])
+        lesmat = self._lesions_to_model_matrix(new_lesions)
 
         # Scale lesion matrix using training parameters
         # R: lesmat_scaled = scale(lesmat, center=old_center, scale=old_scale)
@@ -355,13 +347,7 @@ class LesymapResult:
         if self.svr_model is None:
             raise ValueError("SVR model not available for prediction")
 
-        mask_data = self.mask_img.get_fdata()
-        voxel_indices = np.where(mask_data > 0)
-
-        lesmat = np.array([
-            self._load_and_extract(img, voxel_indices)
-            for img in new_lesions
-        ])
+        lesmat = self._lesions_to_model_matrix(new_lesions)
 
         predictions = self.svr_model.predict(lesmat)
         return predictions
@@ -371,19 +357,43 @@ class LesymapResult:
         if self.regression_coef is None:
             raise ValueError("Regression coefficients not available for prediction")
 
-        mask_data = self.mask_img.get_fdata()
-        voxel_indices = np.where(mask_data > 0)
-
-        lesmat = np.array([
-            self._load_and_extract(img, voxel_indices)
-            for img in new_lesions
-        ])
+        lesmat = self._lesions_to_model_matrix(new_lesions)
 
         predictions = lesmat @ self.regression_coef
         if self.regression_intercept is not None:
             predictions += self.regression_intercept
 
         return predictions
+
+    def _lesions_to_model_matrix(
+        self,
+        new_lesions: Union[List[str], List[nib.Nifti1Image]],
+    ) -> np.ndarray:
+        """Convert new lesion images into the feature space used by the model."""
+        if self.mask_img is None:
+            raise ValueError("Mask image not available for prediction")
+
+        mask_data = self.mask_img.get_fdata()
+        voxel_indices = np.where(mask_data > 0)
+        lesmat = np.array([
+            self._load_and_extract(img, voxel_indices)
+            for img in new_lesions
+        ])
+
+        if self.patchinfo is None:
+            return lesmat
+
+        representative_indices = self.patchinfo.get('analysis_representative_indices')
+        if representative_indices is None:
+            representative_indices = self.patchinfo.get('patch_representative_indices')
+        if representative_indices is None:
+            raise ValueError(
+                "Patch-based model is missing representative voxel indices "
+                "required for prediction"
+            )
+
+        representative_indices = np.asarray(representative_indices, dtype=int)
+        return lesmat[:, representative_indices]
 
     def _load_and_extract(self, img: Union[str, nib.Nifti1Image],
                           voxel_indices: tuple) -> np.ndarray:
