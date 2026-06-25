@@ -88,6 +88,10 @@ class LesymapResult:
 
         # SVR-specific
         self.svr_model = kwargs.get('svr_model')  # sklearn SVR model
+        self.svr_behavior_scale = kwargs.get('svr_behavior_scale')
+        self.svr_behavior_center = kwargs.get('svr_behavior_center')
+        self.svr_lesmat_scale = kwargs.get('svr_lesmat_scale')
+        self.svr_lesmat_center = kwargs.get('svr_lesmat_center')
 
         # Regression-specific
         self.regression_coef = kwargs.get('regression_coef')
@@ -200,6 +204,10 @@ class LesymapResult:
             'sccan_predict_lm': self.sccan_predict_lm,
             # SVR components
             'svr_model': self.svr_model,
+            'svr_behavior_scale': self.svr_behavior_scale,
+            'svr_behavior_center': self.svr_behavior_center,
+            'svr_lesmat_scale': self.svr_lesmat_scale,
+            'svr_lesmat_center': self.svr_lesmat_center,
             # Regression components
             'regression_coef': self.regression_coef,
             'regression_intercept': self.regression_intercept,
@@ -253,6 +261,10 @@ class LesymapResult:
             sccan_lesmat_center=checkpoint_data.get('sccan_lesmat_center'),
             sccan_predict_lm=checkpoint_data.get('sccan_predict_lm'),
             svr_model=checkpoint_data.get('svr_model'),
+            svr_behavior_scale=checkpoint_data.get('svr_behavior_scale'),
+            svr_behavior_center=checkpoint_data.get('svr_behavior_center'),
+            svr_lesmat_scale=checkpoint_data.get('svr_lesmat_scale'),
+            svr_lesmat_center=checkpoint_data.get('svr_lesmat_center'),
             regression_coef=checkpoint_data.get('regression_coef'),
             regression_intercept=checkpoint_data.get('regression_intercept'),
             model_params=checkpoint_data.get('model_params', {}),
@@ -348,8 +360,12 @@ class LesymapResult:
             raise ValueError("SVR model not available for prediction")
 
         lesmat = self._lesions_to_model_matrix(new_lesions)
+        if self.svr_lesmat_center is not None and self.svr_lesmat_scale is not None:
+            lesmat = (lesmat - self.svr_lesmat_center) / self.svr_lesmat_scale
 
         predictions = self.svr_model.predict(lesmat)
+        if self.svr_behavior_center is not None and self.svr_behavior_scale is not None:
+            predictions = predictions * self.svr_behavior_scale + self.svr_behavior_center
         return predictions
 
     def _predict_regression(self, new_lesions: Union[List[str], List[nib.Nifti1Image]]) -> np.ndarray:

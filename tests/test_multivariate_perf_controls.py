@@ -341,6 +341,44 @@ def test_lsm_sccan_nonfinite_cv_returns_null_with_robust_metadata(monkeypatch):
     assert result.model_params['cv_robust_rank_fallback'] is False
 
 
+def test_lsm_sccan_null_result_expands_filtered_patches(monkeypatch):
+    fake_antspy = ZeroWeightAntsPy()
+    monkeypatch.setattr(multivariate, '_import_antspy', lambda: fake_antspy)
+
+    lesmat = np.array(
+        [
+            [1, 0],
+            [0, 1],
+            [1, 0],
+            [0, 1],
+            [1, 0],
+            [0, 1],
+        ],
+        dtype=float,
+    )
+    behavior = np.array([0.1, 0.3, 0.6, 0.8, 1.0, 1.2])
+    patchinfo = {
+        "patchindx": np.array([1, 2, 3]),
+        "analysis_keep_mask": np.array([True, False, True]),
+    }
+
+    result = multivariate.lsm_sccan(
+        lesmat,
+        behavior,
+        _mask_img(3),
+        patchinfo=patchinfo,
+        optimize_sparseness=True,
+        sparseness_range=[0.05],
+        n_jobs=1,
+        robust=0,
+        min_cluster_size=0,
+        show_info=False,
+    )
+
+    assert result.model_params["null_result"] is True
+    np.testing.assert_array_equal(result.stat_img.get_fdata().reshape(-1), [0, 0, 0])
+
+
 def test_import_antspy_finds_installed_ants_backend():
     ants = pytest.importorskip("ants")
     assert hasattr(ants, "sparse_decom2")

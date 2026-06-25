@@ -12,6 +12,7 @@ import warnings
 __all__ = [
     'get_unique_lesion_patches',
     'patches_to_voxels',
+    'analysis_patches_to_voxels',
     'filter_patches_by_prevalence',
     'get_patch_indices',
     'reconstruct_from_patches',
@@ -169,6 +170,38 @@ def patches_to_voxels(statistic: np.ndarray,
     valid = patchindx > 0
     voxel_stats[valid] = statistic[patchindx[valid] - 1]
     return voxel_stats
+
+
+def analysis_patches_to_voxels(statistic: np.ndarray,
+                               patchinfo: Dict,
+                               fill_value: float = 0) -> np.ndarray:
+    """
+    Map analysis patch statistics back to voxel-level space.
+
+    If prevalence filtering removed patches before model fitting, ``statistic``
+    only contains kept patches. Expand it back to the original patch index
+    length before using the original voxel-to-patch assignment.
+    """
+    patchindx = patchinfo['patchindx']
+    keep_mask = patchinfo.get('analysis_keep_mask')
+
+    if keep_mask is None:
+        return patches_to_voxels(statistic, patchindx, fill_value=fill_value)
+
+    keep_mask = np.asarray(keep_mask, dtype=bool)
+    statistic = np.asarray(statistic)
+    if statistic.shape[0] != int(np.sum(keep_mask)):
+        raise ValueError(
+            "Patch statistic length does not match the number of kept patches"
+        )
+
+    full_statistic = np.full(
+        keep_mask.shape[0],
+        fill_value,
+        dtype=statistic.dtype,
+    )
+    full_statistic[keep_mask] = statistic
+    return patches_to_voxels(full_statistic, patchindx, fill_value=fill_value)
 
 
 def filter_patches_by_prevalence(patchinfo: Dict,

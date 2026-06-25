@@ -39,7 +39,8 @@ VALID_METHOD_PARAMS = {
         'robust', 'robust_rank_fallback', 'min_cluster_size'
     },
     'svr': {
-        'C', 'kernel', 'epsilon', 'gamma', 'degree', 'coef0', 'n_perm', 'max_features'
+        'C', 'kernel', 'epsilon', 'gamma', 'degree', 'coef0', 'n_perm',
+        'max_features', 'r_compatible'
     },
     'BMfast': set(),
     'ttest': set(),

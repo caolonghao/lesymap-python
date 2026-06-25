@@ -141,3 +141,44 @@ def test_svr_patch_prediction_roundtrips_through_checkpoint(tmp_path):
     assert result.svr_model.n_features_in_ == result.patchinfo["npatches"]
     assert direct_predictions.shape == (3,)
     np.testing.assert_allclose(loaded_predictions, direct_predictions, rtol=0, atol=0)
+
+
+def test_svr_r_compatible_mode_scales_training_and_prediction(tmp_path):
+    images = _toy_images()
+    behavior = np.array([0.0, 0.2, 0.7, 0.9, 1.1, 0.4], dtype=float)
+
+    result = lesymap.lesymap(
+        images,
+        behavior,
+        method="svr",
+        mask=_toy_mask(),
+        no_patch=True,
+        r_compatible=True,
+        kernel="linear",
+        C=30.0,
+        epsilon=0.1,
+        nperm=0,
+        show_info=False,
+    )
+
+    lesmat = np.vstack([
+        np.asarray(img.dataobj).reshape(-1)
+        for img in images[:3]
+    ])
+    scaled = (lesmat - result.svr_lesmat_center) / result.svr_lesmat_scale
+    expected_scaled = result.svr_model.predict(scaled)
+    expected = (
+        expected_scaled * result.svr_behavior_scale
+        + result.svr_behavior_center
+    )
+
+    direct_predictions = result.predict(images[:3])
+    result.save_checkpoint(tmp_path / "svr-r-compatible.pkl")
+    loaded = LesymapResult.load_checkpoint(tmp_path / "svr-r-compatible.pkl")
+
+    assert result.model_params["r_compatible"] is True
+    assert result.model_params["C"] == 30.0
+    assert result.svr_lesmat_center.shape == (4,)
+    assert result.svr_behavior_center == np.mean(behavior)
+    np.testing.assert_allclose(direct_predictions, expected)
+    np.testing.assert_allclose(loaded.predict(images[:3]), direct_predictions)

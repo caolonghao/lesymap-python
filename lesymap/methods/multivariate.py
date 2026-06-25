@@ -28,7 +28,7 @@ import scipy.ndimage as ndimage
 from joblib import Parallel, delayed
 
 from ..core.result import LesymapResult
-from ..core.patch import patches_to_voxels
+from ..core.patch import analysis_patches_to_voxels
 from ..core.image_utils import matrix_to_image
 
 
@@ -362,7 +362,10 @@ def lsm_sccan(lesmat: np.ndarray,
                 print("  WARNING: Poor cross-validated accuracy, returning NULL result.")
 
             # Create empty result
-            stat_img = matrix_to_image(np.zeros(n_features), mask_img)
+            null_statistic = np.zeros(n_features)
+            if patchinfo is not None and 'patchindx' in patchinfo:
+                null_statistic = analysis_patches_to_voxels(null_statistic, patchinfo)
+            stat_img = matrix_to_image(null_statistic, mask_img)
             result = LesymapResult(
                 stat_img=stat_img,
                 mask_img=mask_img,
@@ -468,8 +471,8 @@ def lsm_sccan(lesmat: np.ndarray,
 
     # Map back to voxel space if using patches
     if patchinfo is not None and 'patchindx' in patchinfo:
-        statistic_full = patches_to_voxels(statistic, patchinfo['patchindx'])
-        raw_weights_full = patches_to_voxels(raw_weights, patchinfo['patchindx'])
+        statistic_full = analysis_patches_to_voxels(statistic, patchinfo)
+        raw_weights_full = analysis_patches_to_voxels(raw_weights, patchinfo)
     else:
         statistic_full = statistic
         raw_weights_full = raw_weights
@@ -567,11 +570,12 @@ def lsm_svr(lesmat: np.ndarray,
             multiple_comparison: str = 'fdr',
             p_threshold: float = 0.05,
             nperm: int = 100,
-            C: float = 1.0,
-            kernel: str = 'linear',
-            epsilon: float = 0.1,
+            C: Optional[float] = None,
+            kernel: Optional[str] = None,
+            epsilon: Optional[float] = None,
             n_perm: int = 50,
             max_features: Optional[int] = None,
+            r_compatible: bool = False,
             show_info: bool = True,
             **kwargs) -> LesymapResult:
     """
@@ -607,6 +611,9 @@ def lsm_svr(lesmat: np.ndarray,
     max_features : int, optional
         Maximum number of features to evaluate for non-linear permutation
         importance. Required for non-linear kernels to avoid unbounded work.
+    r_compatible : bool
+        If True, scale lesmat and behavior before fitting and unscale
+        predictions, matching the main R LESYMAP SVR preprocessing semantics.
     show_info : bool
         Print progress information
     **kwargs
@@ -617,25 +624,64 @@ def lsm_svr(lesmat: np.ndarray,
     LesymapResult
         Result object with weights and statistical maps
     """
+    n_subjects, n_features = lesmat.shape
+    if r_compatible:
+        if kernel is None:
+            kernel = 'rbf'
+        if C is None:
+            C = 30.0
+        if epsilon is None:
+            epsilon = 0.1
+        kwargs.setdefault('gamma', 5.0)
+        if n_subjects < 2:
+            raise ValueError("r_compatible SVR scaling requires at least 2 subjects")
+    else:
+        if kernel is None:
+            kernel = 'linear'
+        if C is None:
+            C = 1.0
+        if epsilon is None:
+            epsilon = 0.1
+
     if show_info:
         print(f"  Running SVR (kernel={kernel}, C={C})...")
 
-    n_subjects, n_features = lesmat.shape
+    if r_compatible:
+        lesmat_fit, lesmat_center, lesmat_scale = _r_scale_matrix(lesmat)
+        behavior_fit, behavior_center, behavior_scale = _r_scale_vector(behavior)
+    else:
+        lesmat_fit = lesmat
+        behavior_fit = behavior
+        lesmat_center = None
+        lesmat_scale = None
+        behavior_center = None
+        behavior_scale = None
 
     # Fit SVR
     svr = SVR(kernel=kernel, C=C, epsilon=epsilon, **kwargs)
-    svr.fit(lesmat, behavior)
+    svr.fit(lesmat_fit, behavior_fit)
 
     # Get predictions and correlation
-    predictions = svr.predict(lesmat)
+    predictions_fit = svr.predict(lesmat_fit)
+    predictions = (
+        predictions_fit * behavior_scale + behavior_center
+        if r_compatible else predictions_fit
+    )
     correlation, p_value = pearsonr(predictions, behavior)
 
     if show_info:
         print(f"  SVR correlation: {correlation:.4f}")
 
-    # Extract weights (for linear kernel, these are the coefficients)
-    if kernel == 'linear':
+    # Extract feature statistics.
+    if r_compatible:
+        weights = (svr.dual_coef_ @ svr.support_vectors_).ravel()
+        statistic = weights.copy()
+        max_abs_weight = np.max(np.abs(weights))
+        if max_abs_weight > 0:
+            statistic = weights * (10.0 / max_abs_weight)
+    elif kernel == 'linear':
         weights = svr.coef_.flatten()
+        statistic = weights.copy()
     else:
         # For non-linear kernels, use permutation importance
         if max_features is None:
@@ -647,18 +693,21 @@ def lsm_svr(lesmat: np.ndarray,
         warnings.warn("Weight extraction not supported for non-linear kernels. "
                       "Using permutation importance instead.")
         weights = _compute_svr_importance(
-            svr, lesmat, behavior, n_perm=n_perm, max_features=max_features
+            svr, lesmat_fit, behavior_fit, n_perm=n_perm, max_features=max_features
         )
+        statistic = weights
 
     # Map back to voxel space if using patches
     if patchinfo is not None and 'patchindx' in patchinfo:
-        weights_full = patches_to_voxels(weights, patchinfo['patchindx'])
+        statistic_full = analysis_patches_to_voxels(statistic, patchinfo)
+        raw_weights_full = analysis_patches_to_voxels(weights, patchinfo)
     else:
-        weights_full = weights
+        statistic_full = statistic
+        raw_weights_full = weights
 
     # Create statistical maps
-    stat_img = matrix_to_image(weights_full, mask_img)
-    raw_weights_img = matrix_to_image(weights_full, mask_img)
+    stat_img = matrix_to_image(statistic_full, mask_img)
+    raw_weights_img = matrix_to_image(raw_weights_full, mask_img)
 
     result = LesymapResult(
         stat_img=stat_img,
@@ -666,10 +715,20 @@ def lsm_svr(lesmat: np.ndarray,
         method='svr',
         raw_weights_img=raw_weights_img,
         svr_model=svr,
+        svr_behavior_scale=behavior_scale,
+        svr_behavior_center=behavior_center,
+        svr_lesmat_scale=lesmat_scale,
+        svr_lesmat_center=lesmat_center,
         model_params={
             'C': C,
             'kernel': kernel,
             'epsilon': epsilon,
+            'gamma': kwargs.get('gamma', None),
+            'r_compatible': r_compatible,
+            'svr_statistic_scale': (
+                'r_beta_scale_10_over_max_abs'
+                if r_compatible else 'raw_weights'
+            ),
             'correlation': correlation,
             'p_value': p_value,
             'n_perm': n_perm,
@@ -679,6 +738,27 @@ def lsm_svr(lesmat: np.ndarray,
     )
 
     return result
+
+
+def _r_scale_vector(vector: np.ndarray) -> Tuple[np.ndarray, float, float]:
+    """Replicate R scale(center=TRUE, scale=TRUE) for a vector."""
+    vector = np.asarray(vector, dtype=float)
+    center = float(np.mean(vector))
+    centered = vector - center
+    scale = float(np.sqrt(np.sum(centered * centered) / (len(vector) - 1)))
+    if scale == 0:
+        scale = 1.0
+    return centered / scale, center, scale
+
+
+def _r_scale_matrix(matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Replicate R scale(center=TRUE, scale=TRUE) column-wise for a matrix."""
+    matrix = np.asarray(matrix, dtype=float)
+    center = np.mean(matrix, axis=0)
+    centered = matrix - center
+    scale = np.sqrt(np.sum(centered * centered, axis=0) / (matrix.shape[0] - 1))
+    scale[scale == 0] = 1.0
+    return centered / scale, center, scale
 
 
 def _optimize_sccan_sparseness(lesmat: np.ndarray,

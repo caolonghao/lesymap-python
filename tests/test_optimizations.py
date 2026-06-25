@@ -11,7 +11,12 @@ import pytest
 import nibabel as nib
 from scipy import stats
 
-from lesymap.core.patch import patches_to_voxels, reconstruct_from_patches
+from lesymap.core.patch import (
+    analysis_patches_to_voxels,
+    patches_to_voxels,
+    reconstruct_from_patches,
+)
+from lesymap.methods.univariate import lsm_chisq
 from lesymap.stats_compiled.ttest import ttest_fast, welch_fast
 from lesymap.stats_compiled.regression import regression_fast, _solve_ols_with_xtx
 
@@ -80,6 +85,19 @@ class TestPatchesToVoxelsVectorized:
         result = reconstruct_from_patches(patch_values, patchindx, n_voxels=5)
 
         expected = np.array([100.0, 200.0, 100.0, 300.0, 300.0])
+        np.testing.assert_array_equal(result, expected)
+
+    def test_analysis_patches_to_voxels_expands_filtered_patches(self):
+        """Filtered analysis patch stats expand before voxel mapping."""
+        statistic = np.array([10.0, 30.0])
+        patchinfo = {
+            "patchindx": np.array([1, 1, 2, 3, 3]),
+            "analysis_keep_mask": np.array([True, False, True]),
+        }
+
+        result = analysis_patches_to_voxels(statistic, patchinfo, fill_value=-1.0)
+
+        expected = np.array([10.0, 10.0, -1.0, 30.0, 30.0])
         np.testing.assert_array_equal(result, expected)
 
 
@@ -184,6 +202,38 @@ class TestChisqVectorized:
         chi2_vec, pval_vec = _chi2_vectorized(lesmat, behavior)
 
         np.testing.assert_array_equal(chi2_vec, 0.0)
+
+    def test_lsm_chisq_expands_filtered_patch_direction(self):
+        """Filtered patch direction vector expands before z-map creation."""
+        lesmat = np.array(
+            [
+                [1, 1],
+                [1, 0],
+                [1, 1],
+                [0, 0],
+                [0, 1],
+                [0, 0],
+            ],
+            dtype=float,
+        )
+        behavior = np.array([1, 1, 0, 0, 1, 0], dtype=float)
+        mask = nib.Nifti1Image(np.ones((3, 1, 1), dtype=float), np.eye(4))
+        patchinfo = {
+            "patchindx": np.array([1, 2, 3]),
+            "analysis_keep_mask": np.array([True, False, True]),
+        }
+
+        result = lsm_chisq(
+            lesmat,
+            behavior,
+            mask,
+            patchinfo=patchinfo,
+            multiple_comparison="none",
+            show_info=False,
+        )
+
+        assert result.zmap_img.get_fdata().reshape(-1).shape == (3,)
+        assert result.zmap_img.get_fdata().reshape(-1)[1] == 0
 
 
 # ─────────────────────────────────────────────────────────────

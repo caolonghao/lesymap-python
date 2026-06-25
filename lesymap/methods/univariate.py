@@ -21,7 +21,7 @@ import nibabel as nib
 from scipy import stats
 
 from ..core.result import LesymapResult
-from ..core.patch import patches_to_voxels
+from ..core.patch import analysis_patches_to_voxels
 from ..core.image_utils import matrix_to_image
 from ..stats_compiled import brunner_munzel_fast, ttest_fast, welch_fast, regression_fast
 from .correction import correct_pvalues, fwer_permutation_threshold
@@ -76,8 +76,8 @@ def lsm_bmfast(lesmat: np.ndarray,
 
     # Map back to voxel space if using patches
     if patchinfo is not None and 'patchindx' in patchinfo:
-        statistic_full = patches_to_voxels(statistic, patchinfo['patchindx'])
-        pvals_full = patches_to_voxels(pvals, patchinfo['patchindx'])
+        statistic_full = analysis_patches_to_voxels(statistic, patchinfo)
+        pvals_full = analysis_patches_to_voxels(pvals, patchinfo, fill_value=1)
     else:
         statistic_full = statistic
         pvals_full = pvals
@@ -181,9 +181,9 @@ def lsm_ttest(lesmat: np.ndarray,
 
     # Map back to voxel space if using patches
     if patchinfo is not None and 'patchindx' in patchinfo:
-        statistic_full = patches_to_voxels(statistic, patchinfo['patchindx'])
-        pvals_full = patches_to_voxels(pvals, patchinfo['patchindx'])
-        df_full = patches_to_voxels(df, patchinfo['patchindx'])
+        statistic_full = analysis_patches_to_voxels(statistic, patchinfo)
+        pvals_full = analysis_patches_to_voxels(pvals, patchinfo, fill_value=1)
+        df_full = analysis_patches_to_voxels(df, patchinfo)
     else:
         statistic_full = statistic
         pvals_full = pvals
@@ -307,8 +307,8 @@ def lsm_regresfast(lesmat: np.ndarray,
 
     # Map back to voxel space if using patches
     if patchinfo is not None and 'patchindx' in patchinfo:
-        statistic_full = patches_to_voxels(statistic, patchinfo['patchindx'])
-        pvals_full = patches_to_voxels(pvals, patchinfo['patchindx'])
+        statistic_full = analysis_patches_to_voxels(statistic, patchinfo)
+        pvals_full = analysis_patches_to_voxels(pvals, patchinfo, fill_value=1)
     else:
         statistic_full = statistic
         pvals_full = pvals
@@ -452,11 +452,17 @@ def lsm_chisq(lesmat: np.ndarray,
 
     # Map back to voxel space if using patches
     if patchinfo is not None and 'patchindx' in patchinfo:
-        statistic_full = patches_to_voxels(statistic, patchinfo['patchindx'])
-        pvals_full = patches_to_voxels(pvals, patchinfo['patchindx'])
+        statistic_full = analysis_patches_to_voxels(statistic, patchinfo)
+        pvals_full = analysis_patches_to_voxels(pvals, patchinfo, fill_value=1)
+        direction = analysis_patches_to_voxels(
+            np.sign(lesmat.mean(axis=0) - 0.5),
+            patchinfo,
+            fill_value=0,
+        )
     else:
         statistic_full = statistic
         pvals_full = pvals
+        direction = np.sign(lesmat.mean(axis=0) - 0.5)
 
     # Multiple comparison correction
     if multiple_comparison != 'none':
@@ -467,7 +473,7 @@ def lsm_chisq(lesmat: np.ndarray,
 
     # Compute z-scores (from chi-square)
     zscores = np.sqrt(statistic_full)
-    zscores = np.sign(lesmat.mean(axis=0) - 0.5) * zscores  # Direction based on prevalence
+    zscores = direction * zscores  # Direction based on prevalence
 
     # Create images
     stat_img = matrix_to_image(statistic_full, mask_img)
