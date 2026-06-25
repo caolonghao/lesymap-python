@@ -9,7 +9,6 @@ from numba import njit, prange
 from typing import Tuple, Optional
 
 
-@njit(parallel=True, cache=True)
 def regression_fast(X: np.ndarray,
                    y: np.ndarray,
                    covariates: Optional[np.ndarray] = None) -> Tuple[np.ndarray, int, int]:
@@ -45,31 +44,61 @@ def regression_fast(X: np.ndarray,
 
     The returned statistic is the t-statistic for beta1 (lesion effect).
     """
-    n_subjects, n_voxels = X.shape
-
-    # Initialize output
-    statistic = np.zeros(n_voxels, dtype=np.float64)
-
-    # Build design matrix structure
     if covariates is None:
-        # Just intercept + lesion
-        kxmat = 2
-    else:
-        n_covariates = covariates.shape[1] if covariates.ndim > 1 else 1
-        kxmat = 2 + n_covariates
+        return _regression_fast_no_covariates(X, y)
 
-    # Loop through voxels
+    covariates = np.asarray(covariates, dtype=np.float64)
+    if covariates.ndim == 1:
+        covariates = covariates.reshape(-1, 1)
+    return _regression_fast_with_covariates(X, y, covariates)
+
+
+def _regression_fast_no_covariates(X: np.ndarray,
+                                   y: np.ndarray) -> Tuple[np.ndarray, int, int]:
+    """Closed-form simple regression for all voxels at once."""
+    n_subjects, n_voxels = X.shape
+    y = np.asarray(y, dtype=np.float64)
+    X = np.asarray(X, dtype=np.float64)
+
+    x_centered = X - np.mean(X, axis=0)
+    y_centered = y - np.mean(y)
+
+    sxx = np.sum(x_centered * x_centered, axis=0)
+    sxy = y_centered @ x_centered
+    syy = np.dot(y_centered, y_centered)
+
+    statistic = np.zeros(n_voxels, dtype=np.float64)
+    valid = sxx > 0
+
+    beta = np.zeros(n_voxels, dtype=np.float64)
+    np.divide(sxy, sxx, out=beta, where=valid)
+
+    rss = syy - beta * sxy
+    rss = np.maximum(rss, 0.0)
+    sig2 = rss / (n_subjects - 2.0)
+
+    se = np.zeros(n_voxels, dtype=np.float64)
+    np.divide(sig2, sxx, out=se, where=valid)
+    se = np.sqrt(se)
+    np.divide(beta, se, out=statistic, where=valid & (se > 0))
+
+    return statistic, n_subjects, 2
+
+
+@njit(parallel=True, cache=True)
+def _regression_fast_with_covariates(X: np.ndarray,
+                                     y: np.ndarray,
+                                     covariates: np.ndarray) -> Tuple[np.ndarray, int, int]:
+    n_subjects, n_voxels = X.shape
+    statistic = np.zeros(n_voxels, dtype=np.float64)
+    n_covariates = covariates.shape[1]
+    kxmat = 2 + n_covariates
+
     for vox in prange(n_voxels):
-        # Build design matrix for this voxel
         xmat = _build_design_matrix(X[:, vox], covariates)
-
-        # Solve OLS: (X'X)^-1 X'y — also returns X'X to reuse below
         coef, resid, sig2, xt_x = _solve_ols(xmat, y, kxmat)
-
-        # Compute standard errors reusing the already-computed X'X
         stderrest = _compute_standard_errors(xt_x, sig2)
 
-        # t-statistic for first predictor (lesion effect)
         if stderrest[0] > 0:
             statistic[vox] = coef[0] / stderrest[0]
         else:
@@ -116,9 +145,6 @@ def _build_design_matrix(voxel_data: np.ndarray,
         xmat[:, 0] = voxel_data  # Lesion predictor
         xmat[:, 1] = 1.0  # Intercept
     else:
-        if covariates.ndim == 1:
-            covariates = covariates.reshape(-1, 1)
-
         n_covariates = covariates.shape[1]
         xmat = np.empty((n, 2 + n_covariates), dtype=np.float64)
 

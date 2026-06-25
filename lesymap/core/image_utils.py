@@ -83,8 +83,8 @@ def average_images(images: List[nib.Nifti1Image],
     nibabel image
         Averaged image
     """
-    # Load all data
-    data_list = [img.get_fdata() for img in images]
+    if len(images) == 0:
+        raise ValueError("At least one image is required")
 
     # Set weights
     if weights is None:
@@ -95,10 +95,10 @@ def average_images(images: List[nib.Nifti1Image],
             raise ValueError("Number of weights must match number of images")
         weights = weights / weights.sum()  # Normalize
 
-    # Compute weighted average
-    avg_data = np.zeros_like(data_list[0])
-    for data, w in zip(data_list, weights):
-        avg_data += data * w
+    # Compute weighted average without retaining all image data at once.
+    avg_data = np.zeros(images[0].shape, dtype=np.float64)
+    for img, w in zip(images, weights):
+        avg_data += np.asanyarray(img.dataobj) * w
 
     # Create output image
     return nib.Nifti1Image(avg_data, images[0].affine, images[0].header)
@@ -124,9 +124,14 @@ def mask_from_average(images: List[nib.Nifti1Image],
     nibabel image
         Binary mask image
     """
-    # Compute average
-    avg_img = average_images(images)
-    avg_data = avg_img.get_fdata()
+    if len(images) == 0:
+        raise ValueError("At least one image is required")
+
+    # Compute average with streaming accumulation to avoid retaining per-image arrays.
+    avg_data = np.zeros(images[0].shape, dtype=np.float64)
+    scale = 1.0 / len(images)
+    for img in images:
+        avg_data += np.asanyarray(img.dataobj) * scale
 
     # Threshold
     mask_data = (avg_data > threshold).astype(np.float64)
@@ -142,7 +147,7 @@ def mask_from_average(images: List[nib.Nifti1Image],
             if size >= min_voxels:
                 mask_data[labeled == i] = 1
 
-    return nib.Nifti1Image(mask_data, avg_img.affine, avg_img.header)
+    return nib.Nifti1Image(mask_data, images[0].affine, images[0].header)
 
 
 def label_clusters(img: nib.Nifti1Image,
@@ -202,10 +207,14 @@ def images_to_matrix(images: List[nib.Nifti1Image],
     np.ndarray
         Matrix of shape (n_subjects, n_voxels_in_mask)
     """
-    mask_data = mask.get_fdata()
-    voxel_indices = np.where(mask_data > 0)
+    mask_data = np.asanyarray(mask.dataobj)
+    voxel_mask = mask_data > 0
+    n_voxels = int(np.count_nonzero(voxel_mask))
 
-    matrix = np.array([img.get_fdata()[voxel_indices] for img in images], dtype=dtype)
+    matrix = np.empty((len(images), n_voxels), dtype=dtype)
+    for i, img in enumerate(images):
+        data = np.asanyarray(img.dataobj)
+        matrix[i, :] = data[voxel_mask].astype(dtype, copy=False)
 
     return matrix
 

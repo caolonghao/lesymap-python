@@ -5,13 +5,15 @@ Tests for the three performance optimizations:
 3. regression XtX single computation
 """
 
+import time
 import numpy as np
 import pytest
 import nibabel as nib
 from scipy import stats
 
 from lesymap.core.patch import patches_to_voxels, reconstruct_from_patches
-from lesymap.stats_compiled.regression import _solve_ols_with_xtx
+from lesymap.stats_compiled.ttest import ttest_fast, welch_fast
+from lesymap.stats_compiled.regression import regression_fast, _solve_ols_with_xtx
 
 
 # ─────────────────────────────────────────────────────────────
@@ -222,6 +224,136 @@ class TestRegressionSingleXtX:
         np.testing.assert_allclose(statistic_new, statistic_orig, rtol=1e-8)
         # Voxel 0 should have the largest t-stat
         assert np.argmax(np.abs(statistic_new)) == 0
+
+    def test_no_covariates_is_stable_with_large_behavior_offset(self):
+        rng = np.random.default_rng(77)
+        X = (rng.random((40, 8)) < 0.4).astype(np.float64)
+        y = 1e8 + rng.normal(scale=0.3, size=40)
+
+        stat, _, _ = regression_fast(X, y)
+        expected = np.array([
+            stats.linregress(X[:, i], y).slope / stats.linregress(X[:, i], y).stderr
+            if np.std(X[:, i]) > 0 else 0.0
+            for i in range(X.shape[1])
+        ])
+
+        np.testing.assert_allclose(stat, expected, rtol=1e-6, atol=1e-6)
+
+    def test_one_dimensional_covariate_vector_is_supported(self):
+        rng = np.random.default_rng(88)
+        X = (rng.random((32, 6)) < 0.35).astype(np.float64)
+        y = rng.normal(size=32)
+        covariate = rng.normal(size=32)
+
+        stat_1d, n_1d, k_1d = regression_fast(X, y, covariate)
+        stat_2d, n_2d, k_2d = regression_fast(X, y, covariate.reshape(-1, 1))
+
+        assert n_1d == n_2d == 32
+        assert k_1d == k_2d == 3
+        np.testing.assert_allclose(stat_1d, stat_2d, rtol=1e-10, atol=1e-10)
+
+
+# ─────────────────────────────────────────────────────────────
+# Optimization 8: t-test group moments avoid per-voxel slicing
+# ─────────────────────────────────────────────────────────────
+
+def _ttest_reference_loop(X, y, welch=False):
+    """Reference implementation that mirrors the original per-voxel formulas."""
+    n_subjects, n_voxels = X.shape
+    statistic = np.zeros(n_voxels)
+    df = np.zeros(n_voxels)
+
+    if not welch:
+        df.fill(n_subjects - 2.0)
+
+    for vox in range(n_voxels):
+        lesioned = X[:, vox] != 0
+        y1 = y[lesioned]
+        y0 = y[~lesioned]
+        n0 = len(y0)
+        n1 = len(y1)
+
+        if n0 == 0 or n1 == 0:
+            statistic[vox] = 0.0
+            df[vox] = 1.0 if welch else n_subjects - 2.0
+            continue
+
+        mean0 = np.mean(y0)
+        mean1 = np.mean(y1)
+        var0 = np.var(y0, ddof=1) if n0 > 1 else 0.0
+        var1 = np.var(y1, ddof=1) if n1 > 1 else 0.0
+
+        if welch:
+            se = np.sqrt(var0 / n0 + var1 / n1)
+            if se > 0:
+                statistic[vox] = (mean0 - mean1) / se
+            if var0 > 0 and var1 > 0 and n0 > 1 and n1 > 1:
+                num = (var0 / n0 + var1 / n1) ** 2
+                den = (var0 / n0) ** 2 / (n0 - 1.0) + (var1 / n1) ** 2 / (n1 - 1.0)
+                df[vox] = num / den if den > 0 else n0 + n1 - 2
+            else:
+                df[vox] = n0 + n1 - 2
+        else:
+            pooled = ((var0 * (n0 - 1.0)) + (var1 * (n1 - 1.0))) / (n_subjects - 2.0)
+            se = np.sqrt(pooled * (1.0 / n0 + 1.0 / n1))
+            if se > 0:
+                statistic[vox] = (mean0 - mean1) / se
+
+    return statistic, df
+
+
+class TestTTestMomentVectorization:
+    """t-test kernels match loop formulas and run fast on matrix-shaped inputs."""
+
+    def test_ttest_and_welch_match_reference_loop(self):
+        rng = np.random.default_rng(1234)
+        X = (rng.random((48, 240)) < 0.32).astype(np.float64)
+        y = rng.normal(size=48).astype(np.float64)
+        X[:, 0] = 0.0
+        X[:, 1] = 1.0
+
+        stat_t, df_t = ttest_fast(X, y, compute_dof=True)
+        ref_t, ref_df_t = _ttest_reference_loop(X, y, welch=False)
+        stat_w, df_w = welch_fast(X, y, compute_dof=True)
+        ref_w, ref_df_w = _ttest_reference_loop(X, y, welch=True)
+
+        np.testing.assert_allclose(stat_t, ref_t, rtol=1e-12, atol=1e-12)
+        np.testing.assert_allclose(df_t, ref_df_t, rtol=1e-12, atol=1e-12)
+        np.testing.assert_allclose(stat_w, ref_w, rtol=1e-12, atol=1e-12)
+        np.testing.assert_allclose(df_w, ref_df_w, rtol=1e-12, atol=1e-12)
+
+    def test_ttest_and_welch_are_stable_with_large_behavior_offset(self):
+        rng = np.random.default_rng(4321)
+        X = (rng.random((48, 40)) < 0.32).astype(np.float64)
+        y = 1e8 + rng.normal(scale=0.5, size=48)
+
+        stat_t, df_t = ttest_fast(X, y, compute_dof=True)
+        ref_t, ref_df_t = _ttest_reference_loop(X, y, welch=False)
+        stat_w, df_w = welch_fast(X, y, compute_dof=True)
+        ref_w, ref_df_w = _ttest_reference_loop(X, y, welch=True)
+
+        np.testing.assert_allclose(stat_t, ref_t, rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(df_t, ref_df_t, rtol=1e-12, atol=1e-12)
+        np.testing.assert_allclose(stat_w, ref_w, rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(df_w, ref_df_w, rtol=1e-6, atol=1e-6)
+
+    def test_ttest_and_welch_large_matrix_runtime(self):
+        rng = np.random.default_rng(5678)
+        X = (rng.random((80, 12000)) < 0.35).astype(np.float64)
+        y = rng.normal(size=80).astype(np.float64)
+
+        t0 = time.perf_counter()
+        stat_t, _ = ttest_fast(X, y, compute_dof=False)
+        ttest_elapsed = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        stat_w, _ = welch_fast(X, y, compute_dof=False)
+        welch_elapsed = time.perf_counter() - t0
+
+        assert np.isfinite(stat_t).all()
+        assert np.isfinite(stat_w).all()
+        assert ttest_elapsed < 2.0, f"ttest_fast took {ttest_elapsed:.3f}s on 80x12000"
+        assert welch_elapsed < 2.0, f"welch_fast took {welch_elapsed:.3f}s on 80x12000"
 
 
 if __name__ == '__main__':

@@ -5,7 +5,7 @@ Port of C++ implementation from LESYMAP/src/TTfast.cpp
 """
 
 import numpy as np
-from numba import njit, prange
+from numba import njit
 from typing import Tuple
 
 
@@ -27,7 +27,6 @@ def _sample_variance(arr: np.ndarray) -> float:
     return ss / (n - 1.0)
 
 
-@njit(parallel=True, cache=True)
 def ttest_fast(X: np.ndarray,
                y: np.ndarray,
                compute_dof: bool = True) -> Tuple[np.ndarray, np.ndarray]:
@@ -62,57 +61,45 @@ def ttest_fast(X: np.ndarray,
     where var_pooled is the weighted average of variances.
     """
     n_subjects, n_voxels = X.shape
+    mask = X != 0
 
-    # Initialize output
+    n1 = mask.sum(axis=0).astype(np.float64)
+    n0 = n_subjects - n1
+    valid = (n0 > 0) & (n1 > 0)
+
+    y = np.asarray(y, dtype=np.float64)
+    y_centered = y - np.mean(y)
+    y2 = y_centered * y_centered
+    total_sum = y_centered.sum()
+    total_sumsq = y2.sum()
+
+    sum1 = y_centered @ mask
+    sumsq1 = y2 @ mask
+    sum0 = total_sum - sum1
+    sumsq0 = total_sumsq - sumsq1
+
     statistic = np.zeros(n_voxels, dtype=np.float64)
     df = np.zeros(n_voxels, dtype=np.float64)
-
     if compute_dof:
-        # Student t has constant degrees of freedom
         df.fill(n_subjects - 2.0)
 
-    # Loop through voxels
-    for vox in prange(n_voxels):
-        thisvox = X[:, vox]
+    mean0 = np.zeros(n_voxels, dtype=np.float64)
+    mean1 = np.zeros(n_voxels, dtype=np.float64)
+    np.divide(sum0, n0, out=mean0, where=n0 > 0)
+    np.divide(sum1, n1, out=mean1, where=n1 > 0)
 
-        # Find indices for each group
-        indx0 = np.where(thisvox == 0)[0]
-        indx1 = np.where(thisvox != 0)[0]
+    ss0 = sumsq0 - (sum0 * sum0) / np.maximum(n0, 1.0)
+    ss1 = sumsq1 - (sum1 * sum1) / np.maximum(n1, 1.0)
+    ss0 = np.maximum(ss0, 0.0)
+    ss1 = np.maximum(ss1, 0.0)
 
-        n0 = len(indx0)
-        n1 = len(indx1)
-
-        if n0 == 0 or n1 == 0:
-            statistic[vox] = 0.0
-            continue
-
-        # Extract behavior for each group
-        y0 = y[indx0]
-        y1 = y[indx1]
-
-        # Compute means
-        mean0 = np.mean(y0)
-        mean1 = np.mean(y1)
-
-        # Compute variances (sample variance, n-1 denominator)
-        var0 = _sample_variance(y0)
-        var1 = _sample_variance(y1)
-
-        # Pooled variance (weighted by n-1)
-        var_pooled = ((var0 * (n0 - 1.0)) + (var1 * (n1 - 1.0))) / (n_subjects - 2.0)
-
-        # t-statistic
-        se = np.sqrt(var_pooled * (1.0 / n0 + 1.0 / n1))
-
-        if se > 0:
-            statistic[vox] = (mean0 - mean1) / se
-        else:
-            statistic[vox] = 0.0
+    var_pooled = (ss0 + ss1) / (n_subjects - 2.0)
+    se = np.sqrt(var_pooled * (1.0 / np.maximum(n0, 1.0) + 1.0 / np.maximum(n1, 1.0)))
+    np.divide(mean0 - mean1, se, out=statistic, where=valid & (se > 0))
 
     return statistic, df
 
 
-@njit(parallel=True, cache=True)
 def welch_fast(X: np.ndarray,
               y: np.ndarray,
               compute_dof: bool = True) -> Tuple[np.ndarray, np.ndarray]:
@@ -147,58 +134,58 @@ def welch_fast(X: np.ndarray,
     Degrees of freedom are computed using the Welch-Satterthwaite equation.
     """
     n_subjects, n_voxels = X.shape
+    mask = X != 0
 
-    # Initialize output
+    n1 = mask.sum(axis=0).astype(np.float64)
+    n0 = n_subjects - n1
+    valid = (n0 > 0) & (n1 > 0)
+
+    y = np.asarray(y, dtype=np.float64)
+    y_centered = y - np.mean(y)
+    y2 = y_centered * y_centered
+    total_sum = y_centered.sum()
+    total_sumsq = y2.sum()
+
+    sum1 = y_centered @ mask
+    sumsq1 = y2 @ mask
+    sum0 = total_sum - sum1
+    sumsq0 = total_sumsq - sumsq1
+
     statistic = np.zeros(n_voxels, dtype=np.float64)
     df = np.zeros(n_voxels, dtype=np.float64)
+    df[~valid] = 1.0
 
-    # Loop through voxels
-    for vox in prange(n_voxels):
-        thisvox = X[:, vox]
+    mean0 = np.zeros(n_voxels, dtype=np.float64)
+    mean1 = np.zeros(n_voxels, dtype=np.float64)
+    np.divide(sum0, n0, out=mean0, where=n0 > 0)
+    np.divide(sum1, n1, out=mean1, where=n1 > 0)
 
-        # Find indices for each group
-        indx0 = np.where(thisvox == 0)[0]
-        indx1 = np.where(thisvox != 0)[0]
+    ss0 = sumsq0 - (sum0 * sum0) / np.maximum(n0, 1.0)
+    ss1 = sumsq1 - (sum1 * sum1) / np.maximum(n1, 1.0)
+    ss0 = np.maximum(ss0, 0.0)
+    ss1 = np.maximum(ss1, 0.0)
 
-        n0 = len(indx0)
-        n1 = len(indx1)
+    var0 = np.zeros(n_voxels, dtype=np.float64)
+    var1 = np.zeros(n_voxels, dtype=np.float64)
+    np.divide(ss0, n0 - 1.0, out=var0, where=n0 > 1)
+    np.divide(ss1, n1 - 1.0, out=var1, where=n1 > 1)
 
-        if n0 == 0 or n1 == 0:
-            statistic[vox] = 0.0
-            df[vox] = 1.0
-            continue
+    se2 = var0 / np.maximum(n0, 1.0) + var1 / np.maximum(n1, 1.0)
+    se = np.sqrt(se2)
+    np.divide(mean0 - mean1, se, out=statistic, where=valid & (se > 0))
 
-        # Extract behavior for each group
-        y0 = y[indx0]
-        y1 = y[indx1]
+    if compute_dof:
+        df_fallback = n0 + n1 - 2.0
+        df[valid] = df_fallback[valid]
 
-        # Compute means
-        mean0 = np.mean(y0)
-        mean1 = np.mean(y1)
-
-        # Compute variances
-        var0 = _sample_variance(y0)
-        var1 = _sample_variance(y1)
-
-        # Welch statistic
-        se = np.sqrt(var0 / n0 + var1 / n1)
-
-        if se > 0:
-            statistic[vox] = (mean0 - mean1) / se
-        else:
-            statistic[vox] = 0.0
-
-        # Degrees of freedom (Welch-Satterthwaite)
-        if compute_dof:
-            if var0 > 0 and var1 > 0 and n0 > 1 and n1 > 1:
-                num = (var0 / n0 + var1 / n1) ** 2
-                den = (var0 / n0) ** 2 / (n0 - 1.0) + (var1 / n1) ** 2 / (n1 - 1.0)
-
-                if den > 0:
-                    df[vox] = num / den
-                else:
-                    df[vox] = n0 + n1 - 2
-            else:
-                df[vox] = n0 + n1 - 2
+        df_valid = valid & (var0 > 0) & (var1 > 0) & (n0 > 1) & (n1 > 1)
+        term0 = var0 / np.maximum(n0, 1.0)
+        term1 = var1 / np.maximum(n1, 1.0)
+        numerator = (term0 + term1) ** 2
+        denominator = (
+            (term0 * term0) / np.maximum(n0 - 1.0, 1.0)
+            + (term1 * term1) / np.maximum(n1 - 1.0, 1.0)
+        )
+        np.divide(numerator, denominator, out=df, where=df_valid & (denominator > 0))
 
     return statistic, df

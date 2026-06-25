@@ -282,9 +282,8 @@ def test_summary():
         print("OVERALL RESULT: SOME TESTS FAILED")
     print("=" * 60)
 
-    return all_passed
+    assert all_passed
 
 
 if __name__ == '__main__':
-    success = test_summary()
-    exit(0 if success else 1)
+    test_summary()

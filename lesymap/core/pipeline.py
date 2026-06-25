@@ -35,10 +35,11 @@ from .result import LesymapResult
 VALID_METHOD_PARAMS = {
     'sccan': {
         'optimize_sparseness', 'sparseness', 'nvecs', 'cthresh',
-        'its', 'smooth', 'cluster_threshold'
+        'its', 'smooth', 'cluster_threshold', 'sparseness_range', 'n_jobs',
+        'robust', 'robust_rank_fallback'
     },
     'svr': {
-        'C', 'kernel', 'epsilon', 'gamma', 'degree', 'coef0'
+        'C', 'kernel', 'epsilon', 'gamma', 'degree', 'coef0', 'n_perm', 'max_features'
     },
     'BMfast': set(),
     'ttest': set(),

@@ -297,18 +297,28 @@ def check_binary_values(images: List[nib.Nifti1Image],
     dict
         Information about binary values found
     """
-    all_values = []
+    observed_values = set()
+    invalid_examples = []
+    is_binary = True
     is_255_format = False
 
     for i, img in enumerate(images):
-        data = img.get_fdata()
-        unique_vals = np.unique(data)
-        all_values.extend(unique_vals)
+        data = np.asanyarray(img.dataobj)
 
-        # Check if values are only 0 and 255
-        if set(unique_vals) <= {0, 1}:
+        has_zero = bool(np.any(data == 0))
+        has_one = bool(np.any(data == 1))
+        has_255 = bool(np.any(data == 255)) if allow_255 else False
+
+        if has_zero:
+            observed_values.add(0)
+        if has_one:
+            observed_values.add(1)
+        if has_255:
+            observed_values.add(255)
+
+        if np.all((data == 0) | (data == 1)):
             pass  # Standard binary
-        elif allow_255 and set(unique_vals) <= {0, 255}:
+        elif allow_255 and np.all((data == 0) | (data == 255)):
             is_255_format = True
             if verbose:
                 warnings.warn(
@@ -316,15 +326,30 @@ def check_binary_values(images: List[nib.Nifti1Image],
                     "Consider rebinarizing with rebinarize_threshold=0.5"
                 )
         else:
+            is_binary = False
+            valid_mask = (data == 0) | (data == 1)
+            if allow_255:
+                valid_mask |= data == 255
+            invalid = data[~valid_mask]
+            if invalid_examples == [] and invalid.size > 0:
+                invalid_examples = invalid.flat[:5].tolist()
             if verbose:
                 warnings.warn(
-                    f"Image {i} contains non-binary values: {unique_vals[:5]}..."
+                    f"Image {i} contains non-binary values: {invalid_examples}..."
                 )
 
-    all_unique = np.unique(all_values)
+    valid_values = {0, 1}
+    if allow_255:
+        valid_values.add(255)
+    global_binary = is_binary and observed_values <= valid_values
+
+    if invalid_examples:
+        unique_values = np.asarray((sorted(observed_values) + invalid_examples)[:5])
+    else:
+        unique_values = np.asarray(sorted(observed_values))
 
     return {
-        'unique_values': all_unique,
-        'is_binary': set(all_unique) <= {0, 1} or (allow_255 and set(all_unique) <= {0, 255}),
+        'unique_values': unique_values,
+        'is_binary': global_binary,
         'is_255_format': is_255_format,
     }

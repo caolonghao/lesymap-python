@@ -9,6 +9,7 @@ Based on R implementation in LESYMAP/R/lsm_sccan.R
 
 from typing import Optional, Dict, List, Tuple
 import warnings
+import inspect
 
 
 __all__ = [
@@ -22,8 +23,9 @@ from sklearn.svm import SVR
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold
-from scipy.stats import pearsonr, t as t_dist
+from scipy.stats import pearsonr, t as t_dist, rankdata
 import scipy.ndimage as ndimage
+from joblib import Parallel, delayed
 
 from ..core.result import LesymapResult
 from ..core.patch import patches_to_voxels
@@ -32,7 +34,7 @@ from ..core.image_utils import matrix_to_image
 
 def _import_antspy():
     """Try to import ANTsPy from multiple possible package names."""
-    for pkg_name in ['antspyx', 'antspy', 'antspyt']:
+    for pkg_name in ['ants', 'antspyx', 'antspy', 'antspyt']:
         try:
             mod = __import__(pkg_name)
             if hasattr(mod, 'sparse_decom2'):
@@ -40,6 +42,121 @@ def _import_antspy():
         except (ImportError, AttributeError):
             continue
     return None
+
+
+def _call_sparse_decom2(antspyt, inmats, **kwargs):
+    """Call sparse_decom2 across ANTsPy variants with small API differences."""
+    sparse_decom2 = antspyt.sparse_decom2
+    try:
+        signature = inspect.signature(sparse_decom2)
+    except (TypeError, ValueError):
+        return sparse_decom2(inmats, **kwargs)
+
+    parameters = signature.parameters
+    if 'maxBased' in kwargs and 'maxBased' not in parameters and 'max_based' in parameters:
+        kwargs = kwargs.copy()
+        kwargs['max_based'] = kwargs.pop('maxBased')
+
+    accepts_var_kwargs = any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in parameters.values()
+    )
+    if not accepts_var_kwargs:
+        kwargs = {key: value for key, value in kwargs.items() if key in parameters}
+
+    return sparse_decom2(inmats, **kwargs)
+
+
+def _rank_transform_columns(matrix: np.ndarray) -> np.ndarray:
+    """Column-wise average-rank transform followed by z-scoring."""
+    matrix = np.asarray(matrix, dtype=float)
+    if matrix.ndim == 1:
+        matrix = matrix.reshape(-1, 1)
+
+    ranked = np.empty_like(matrix, dtype=float)
+    for col_idx in range(matrix.shape[1]):
+        ranked[:, col_idx] = rankdata(matrix[:, col_idx], method='average')
+
+    centered = ranked - np.mean(ranked, axis=0)
+    scale = np.std(ranked, axis=0, ddof=0)
+    constant = scale == 0
+    scale[constant] = 1.0
+    transformed = centered / scale
+    transformed[:, constant] = 0.0
+    return transformed
+
+
+def _normalize_robust_rank_fallback(policy: str) -> str:
+    valid = {'auto', 'never', 'force'}
+    if policy not in valid:
+        raise ValueError(
+            f"robust_rank_fallback must be one of {sorted(valid)}, got {policy!r}"
+        )
+    return policy
+
+
+def _is_robust_not_implemented(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return 'robust' in text and ('not implemented' in text or 'not currently implemented' in text)
+
+
+def _rank_transform_sccan_inputs(inmats: List[np.ndarray]) -> List[np.ndarray]:
+    return [_rank_transform_columns(np.asarray(mat, dtype=float)) for mat in inmats]
+
+
+def _call_sparse_decom2_with_robust_fallback(
+    antspyt,
+    inmats: List[np.ndarray],
+    robust: int,
+    robust_rank_fallback: str = 'auto',
+    **kwargs,
+):
+    """Call sparse_decom2, optionally emulating ANTsR robust rank behavior."""
+    robust_rank_fallback = _normalize_robust_rank_fallback(robust_rank_fallback)
+    info = {
+        'robust_requested': robust,
+        'robust_backend_used': robust,
+        'robust_rank_fallback': False,
+        'rank_transform': None,
+        'rank_transform_applied_to': [],
+        'backend_robust_error': None,
+    }
+
+    if robust <= 0:
+        call_kwargs = kwargs.copy()
+        call_kwargs['robust'] = robust
+        return _call_sparse_decom2(antspyt, inmats, **call_kwargs), inmats, info
+
+    if robust_rank_fallback == 'force':
+        transformed = _rank_transform_sccan_inputs(inmats)
+        call_kwargs = kwargs.copy()
+        call_kwargs['robust'] = 0
+        info.update({
+            'robust_backend_used': 0,
+            'robust_rank_fallback': True,
+            'rank_transform': 'column_average_rank_then_zscore',
+            'rank_transform_applied_to': ['lesmat', 'behavior'],
+        })
+        return _call_sparse_decom2(antspyt, transformed, **call_kwargs), transformed, info
+
+    call_kwargs = kwargs.copy()
+    call_kwargs['robust'] = robust
+    try:
+        return _call_sparse_decom2(antspyt, inmats, **call_kwargs), inmats, info
+    except Exception as exc:
+        if robust_rank_fallback != 'auto' or not _is_robust_not_implemented(exc):
+            raise
+
+        transformed = _rank_transform_sccan_inputs(inmats)
+        call_kwargs['robust'] = 0
+        info.update({
+            'robust_backend_used': 0,
+            'robust_rank_fallback': True,
+            'rank_transform': 'column_average_rank_then_zscore',
+            'rank_transform_applied_to': ['lesmat', 'behavior'],
+            'backend_robust_error': f"{type(exc).__name__}: {exc}",
+        })
+        return _call_sparse_decom2(antspyt, transformed, **call_kwargs), transformed, info
 
 
 def lsm_sccan(lesmat: np.ndarray,
@@ -62,6 +179,9 @@ def lsm_sccan(lesmat: np.ndarray,
               max_based: bool = False,
               directional_sccan: bool = True,
               min_cluster_size: Optional[int] = None,
+              sparseness_range: Optional[List[float]] = None,
+              n_jobs: int = 1,
+              robust_rank_fallback: str = 'auto',
               show_info: bool = True,
               **kwargs) -> LesymapResult:
     """
@@ -112,6 +232,12 @@ def lsm_sccan(lesmat: np.ndarray,
         If True, allow positive and negative weights (default True)
     min_cluster_size : int, optional
         Minimum cluster size for post-processing (defaults to cthresh)
+    sparseness_range : list of float, optional
+        Sparseness grid to test during optimization
+    n_jobs : int
+        Number of parallel jobs for sparseness optimization
+    robust_rank_fallback : {'auto', 'never', 'force'}
+        How to handle ANTsPy backends that expose robust but do not implement it.
     show_info : bool
         Print progress information
     **kwargs
@@ -134,6 +260,8 @@ def lsm_sccan(lesmat: np.ndarray,
             "For univariate methods (BMfast, t-test, etc.), "
             "ANTsPy is not required."
         )
+
+    robust_rank_fallback = _normalize_robust_rank_fallback(robust_rank_fallback)
 
     n_subjects, n_features = lesmat.shape
     behavior_orig = behavior.copy()
@@ -194,19 +322,26 @@ def lsm_sccan(lesmat: np.ndarray,
             sparseness=sparseness,
             just_validate=validate_sparseness,
             directional_sccan=directional_sccan,
+            sparseness_range=sparseness_range,
+            n_jobs=n_jobs,
             antspyt=antspyt,
+            robust_rank_fallback=robust_rank_fallback,
         )
 
         optimal_sparseness = cv_result['optimal_sparseness']
         cv_correlation_stat = cv_result['cv_correlation']
+        cv_robust_info = cv_result.get('robust_info', {})
+        actual_sparseness_range = cv_result.get('sparseness_range', sparseness_range)
         sparseness_vec = [optimal_sparseness, sparseness_behav]
 
         # Compute p-value for CV correlation
         # R: tstat = (r*sqrt(n-2))/(sqrt(1 - r^2))
         # R: CVcorrelation.pval = pt(-abs(tstat), n-2)*2
-        r = abs(cv_correlation_stat)
+        r = abs(cv_correlation_stat) if np.isfinite(cv_correlation_stat) else np.nan
         n = len(behavior)
-        if r < 1.0:
+        if not np.isfinite(r):
+            cv_correlation_pval = 1.0
+        elif r < 1.0:
             tstat = (r * np.sqrt(n - 2)) / np.sqrt(1 - r**2)
             cv_correlation_pval = t_dist.sf(abs(tstat), n - 2) * 2
         else:
@@ -234,13 +369,20 @@ def lsm_sccan(lesmat: np.ndarray,
                 method='sccan',
                 model_params={
                     'sparseness': optimal_sparseness,
+                    'robust': robust,
+                    'robust_rank_fallback_policy': robust_rank_fallback,
                     'cv_correlation': cv_correlation_stat,
                     'cv_pvalue': cv_correlation_pval,
+                    'sparseness_range': actual_sparseness_range,
                     'null_result': True,
+                    **cv_robust_info,
                 },
                 patchinfo=patchinfo,
             )
             return result
+    else:
+        cv_robust_info = {}
+        actual_sparseness_range = sparseness_range
 
     if show_info:
         print(f"  Calling SCCAN with:")
@@ -255,12 +397,15 @@ def lsm_sccan(lesmat: np.ndarray,
 
     # Prepare data for ANTsPy
     inmats = [lesmat_scaled, behavior_scaled.reshape(-1, 1)]
-    inmask = [np.ones(n_features, dtype=int), None]
+    inmask = [None, None]
 
     # Run SCCAN
     try:
-        sccan_result = antspyt.sparse_decom2(
+        sccan_result, fitted_inmats, robust_info = _call_sparse_decom2_with_robust_fallback(
+            antspyt,
             inmats,
+            robust=robust,
+            robust_rank_fallback=robust_rank_fallback,
             inmask=inmask,
             sparseness=sparseness_vec,
             nvecs=nvecs,
@@ -268,7 +413,6 @@ def lsm_sccan(lesmat: np.ndarray,
             its=its,
             smooth=smooth,
             mycoption=mycoption,
-            robust=robust,
             perms=nperm,
             maxBased=max_based,
             **kwargs
@@ -305,8 +449,8 @@ def lsm_sccan(lesmat: np.ndarray,
             poscor = -1 if raw_correlation < 0 else 1
         else:
             # Compute correlation manually
-            weighted_scores = lesmat_scaled @ eig1
-            corr, _ = pearsonr(weighted_scores, behavior_scaled)
+            weighted_scores = fitted_inmats[0] @ eig1
+            corr, _ = pearsonr(weighted_scores, fitted_inmats[1].ravel())
             poscor = -1 if corr < 0 else 1
 
         flipval = posbehav * poscor
@@ -393,6 +537,11 @@ def lsm_sccan(lesmat: np.ndarray,
             'smooth': smooth,
             'cthresh': cthresh,
             'robust': robust,
+            'robust_rank_fallback_policy': robust_rank_fallback,
+            'prediction_rank_transform': (
+                'none; match LESYMAP R calibration/prediction with saved lesion center/scale'
+                if robust_info['robust_rank_fallback'] else None
+            ),
             'mycoption': mycoption,
             'max_based': max_based,
             'directional_sccan': directional_sccan,
@@ -400,6 +549,10 @@ def lsm_sccan(lesmat: np.ndarray,
             'p_value': p_cal,
             'cv_correlation': cv_correlation_stat,
             'cv_pvalue': cv_correlation_pval,
+            'sparseness_range': actual_sparseness_range,
+            'n_jobs': n_jobs,
+            **cv_robust_info,
+            **robust_info,
         },
         patchinfo=patchinfo,
     )
@@ -417,6 +570,8 @@ def lsm_svr(lesmat: np.ndarray,
             C: float = 1.0,
             kernel: str = 'linear',
             epsilon: float = 0.1,
+            n_perm: int = 50,
+            max_features: Optional[int] = None,
             show_info: bool = True,
             **kwargs) -> LesymapResult:
     """
@@ -447,6 +602,11 @@ def lsm_svr(lesmat: np.ndarray,
         SVR kernel ('linear', 'rbf', 'poly')
     epsilon : float
         SVR epsilon parameter
+    n_perm : int
+        Number of permutations per feature for non-linear kernels
+    max_features : int, optional
+        Maximum number of features to evaluate for non-linear permutation
+        importance. Required for non-linear kernels to avoid unbounded work.
     show_info : bool
         Print progress information
     **kwargs
@@ -478,9 +638,17 @@ def lsm_svr(lesmat: np.ndarray,
         weights = svr.coef_.flatten()
     else:
         # For non-linear kernels, use permutation importance
+        if max_features is None:
+            raise ValueError(
+                "Non-linear SVR permutation importance requires max_features "
+                "to bound runtime. Pass max_features=<int> and optionally "
+                "n_perm=<int>, or use kernel='linear' for coefficient weights."
+            )
         warnings.warn("Weight extraction not supported for non-linear kernels. "
                       "Using permutation importance instead.")
-        weights = _compute_svr_importance(svr, lesmat, behavior)
+        weights = _compute_svr_importance(
+            svr, lesmat, behavior, n_perm=n_perm, max_features=max_features
+        )
 
     # Map back to voxel space if using patches
     if patchinfo is not None and 'patchindx' in patchinfo:
@@ -504,6 +672,8 @@ def lsm_svr(lesmat: np.ndarray,
             'epsilon': epsilon,
             'correlation': correlation,
             'p_value': p_value,
+            'n_perm': n_perm,
+            'max_features': max_features,
         },
         patchinfo=patchinfo,
     )
@@ -530,7 +700,9 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
                                sparseness_range: List[float] = None,
                                n_folds: int = 4,
                                n_reps: int = 1,
-                               antspyt=None) -> Dict:
+                               n_jobs: int = 1,
+                               antspyt=None,
+                               robust_rank_fallback: str = 'auto') -> Dict:
     """
     Optimize SCCAN sparseness parameter via cross-validation.
 
@@ -576,8 +748,12 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
         Number of CV folds
     n_reps : int
         Number of CV repetitions
+    n_jobs : int
+        Number of parallel jobs across sparseness candidates
     antspyt : module
         ANTsPy module
+    robust_rank_fallback : {'auto', 'never', 'force'}
+        How to handle ANTsPy backends that expose robust but do not implement it.
 
     Returns
     -------
@@ -597,6 +773,8 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
     if cthresh is None:
         cthresh = [150, 0]
 
+    robust_rank_fallback = _normalize_robust_rank_fallback(robust_rank_fallback)
+
     # Default sparseness range (as in R: use negative for directional)
     if sparseness_range is None:
         if directional_sccan:
@@ -611,16 +789,16 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
         if directional_sccan and sparseness > 0:
             sparseness_range = [-sparseness]
 
-    n_features = lesmat.shape[1]
-    inmask = [np.ones(n_features, dtype=int), None]
+    inmask = [None, None]
 
     best_sparseness = sparseness_range[0]
     best_correlation = -np.inf
 
-    for test_sparseness in sparseness_range:
+    def evaluate_sparseness(test_sparseness):
         sparseness_vec = [test_sparseness, sparseness_behav]
 
         cv_correlations = []
+        robust_infos = []
 
         for rep in range(n_reps):
             kf = KFold(n_splits=n_folds, shuffle=True, random_state=42 + rep)
@@ -636,33 +814,32 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
                 # Train SCCAN on training fold
                 inmats_train = [lesmat_train, behavior_train.reshape(-1, 1)]
 
-                try:
-                    result = antspyt.sparse_decom2(
-                        inmats_train,
-                        inmask=inmask,
-                        sparseness=sparseness_vec,
-                        nvecs=nvecs,
-                        its=its,
-                        smooth=smooth,
-                        mycoption=mycoption,
-                        robust=robust,
-                        cthresh=cthresh,
-                        maxBased=max_based,
-                    )
+                result, _, robust_info = _call_sparse_decom2_with_robust_fallback(
+                    antspyt,
+                    inmats_train,
+                    robust=robust,
+                    robust_rank_fallback=robust_rank_fallback,
+                    inmask=inmask,
+                    sparseness=sparseness_vec,
+                    nvecs=nvecs,
+                    its=its,
+                    smooth=smooth,
+                    mycoption=mycoption,
+                    cthresh=cthresh,
+                    maxBased=max_based,
+                )
+                robust_infos.append(robust_info)
 
-                    # Extract weights
-                    eig1 = result['eig1'] if 'eig1' in result else result['weights'][0]
-                    eig1 = np.asarray(eig1).flatten()
-                    eig2 = result['eig2'] if 'eig2' in result else result['weights'][1]
-                    eig2 = np.asarray(eig2).flatten()
+                # Extract weights
+                eig1 = result['eig1'] if 'eig1' in result else result['weights'][0]
+                eig1 = np.asarray(eig1).flatten()
+                eig2 = result['eig2'] if 'eig2' in result else result['weights'][1]
+                eig2 = np.asarray(eig2).flatten()
 
-                    # Predict on test fold
-                    # R: behavior.predicted[fold] = lesmat[fold,] %*% t(trainsccan$eig1) %*% trainsccan$eig2
-                    pred = lesmat_test @ eig1.reshape(-1, 1) @ eig2.reshape(1, -1)
-                    behavior_predicted[test_idx] = pred.flatten()
-
-                except Exception:
-                    behavior_predicted[test_idx] = np.nan
+                # Predict on test fold
+                # R: behavior.predicted[fold] = lesmat[fold,] %*% t(trainsccan$eig1) %*% trainsccan$eig2
+                pred = lesmat_test @ eig1.reshape(-1, 1) @ eig2.reshape(1, -1)
+                behavior_predicted[test_idx] = pred.flatten()
 
             # Compute CV correlation for this rep
             valid_mask = ~np.isnan(behavior_predicted)
@@ -673,25 +850,68 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
                 cv_correlations.append(-np.inf)
 
         mean_corr = np.mean(cv_correlations)
+        return test_sparseness, mean_corr, robust_infos
 
+    if n_jobs == 1 or len(sparseness_range) == 1:
+        grid_results = [evaluate_sparseness(s) for s in sparseness_range]
+    else:
+        grid_results = Parallel(n_jobs=n_jobs, prefer='threads')(
+            delayed(evaluate_sparseness)(s) for s in sparseness_range
+        )
+
+    all_robust_infos = [
+        info
+        for _, _, infos in grid_results
+        for info in infos
+    ]
+    cv_robust_info = {
+        'cv_robust_requested': robust,
+        'cv_robust_backend_used': 0
+        if any(info['robust_backend_used'] == 0 for info in all_robust_infos)
+        else robust,
+        'cv_robust_rank_fallback': any(
+            info['robust_rank_fallback'] for info in all_robust_infos
+        ),
+        'cv_rank_transform': (
+            'column_average_rank_then_zscore'
+            if any(info['robust_rank_fallback'] for info in all_robust_infos)
+            else None
+        ),
+        'cv_backend_robust_error': next(
+            (
+                info['backend_robust_error']
+                for info in all_robust_infos
+                if info['backend_robust_error']
+            ),
+            None,
+        ),
+    }
+
+    for test_sparseness, mean_corr, _ in grid_results:
         if show_info and not just_validate:
             print(f"    Sparseness={test_sparseness:.3f}: CV correlation={mean_corr:.4f}")
 
-        if mean_corr > best_correlation:
+        if np.isfinite(mean_corr) and mean_corr > best_correlation:
             best_correlation = mean_corr
             best_sparseness = test_sparseness
+
+    if best_correlation == -np.inf:
+        best_correlation = np.nan
 
     # Return absolute value of sparseness
     return {
         'optimal_sparseness': abs(best_sparseness),
-        'cv_correlation': best_correlation
+        'cv_correlation': best_correlation,
+        'sparseness_range': sparseness_range,
+        'robust_info': cv_robust_info,
     }
 
 
 def _compute_svr_importance(svr: SVR,
                             lesmat: np.ndarray,
                             behavior: np.ndarray,
-                            n_perm: int = 50) -> np.ndarray:
+                            n_perm: int = 50,
+                            max_features: Optional[int] = None) -> np.ndarray:
     """
     Compute feature importance for SVR via permutation.
 
@@ -705,6 +925,9 @@ def _compute_svr_importance(svr: SVR,
         Behavioral scores
     n_perm : int
         Number of permutations per feature
+    max_features : int, optional
+        Maximum number of features to permute. If smaller than the full feature
+        count, features with highest variance are evaluated and the rest remain 0.
 
     Returns
     -------
@@ -715,7 +938,19 @@ def _compute_svr_importance(svr: SVR,
     n_features = lesmat.shape[1]
     importance = np.zeros(n_features)
 
-    for i in range(n_features):
+    if n_perm < 1:
+        raise ValueError(f"n_perm must be >= 1, got {n_perm}")
+    if max_features is not None:
+        if max_features < 1:
+            raise ValueError(f"max_features must be >= 1, got {max_features}")
+        if max_features < n_features:
+            feature_indices = np.argsort(np.var(lesmat, axis=0))[::-1][:max_features]
+        else:
+            feature_indices = np.arange(n_features)
+    else:
+        feature_indices = np.arange(n_features)
+
+    for i in feature_indices:
         scores = []
         for _ in range(n_perm):
             lesmat_perm = lesmat.copy()
