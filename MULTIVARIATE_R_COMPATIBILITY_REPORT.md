@@ -21,21 +21,23 @@ Fresh verification on `main` after merge:
 
 ```text
 pytest -q
-117 passed, 16 deselected, 272 warnings in 6.66s
+121 passed, 16 deselected, 280 warnings in 7.23s
 pytest -q tests/test_prediction_roundtrip.py tests/test_multivariate_perf_controls.py
-18 passed, 40 warnings in 1.90s
+19 passed, 42 warnings in 1.79s
 pytest -q tests/test_svr_r_compatible.py tests/test_svr_r_comparison.py::TestTinyTrueRLSMSVRReference tests/test_multivariate_perf_controls.py tests/test_prediction_roundtrip.py
 29 passed, 62 warnings in 2.12s
 pytest -q -m slow tests/test_testdata_prediction_e2e.py -rs
 2 passed, 4 warnings in 8.24s
+pytest -q -m slow tests/test_sccan_r_comparison.py::TestPythonLSMSCCANEndToEnd tests/test_testdata_prediction_e2e.py -rs
+3 passed, 6 warnings in 87.23s (0:01:27)
 pytest -q tests/test_sccan_r_comparison.py
-26 passed, 2 deselected, 60 warnings in 1.91s
+12 passed, 2 deselected, 28 warnings in 1.30s
 pytest -q -m slow tests/test_sccan_r_comparison.py::TestTinySCCANCVReference::test_python_r_bounded_sccan_cv_runs_on_tiny_r_fixture -rs
-1 passed, 2 warnings in 1.82s
+1 passed, 2 warnings in 1.76s
 pytest -q -m slow tests/test_svr_r_comparison.py::TestPythonLSMSVREndToEnd
 2 passed, 5 warnings in 98.17s (0:01:38)
 pytest -q -m slow tests/test_svr_r_comparison.py
-12 passed, 2 deselected, 29 warnings in 102.28s (0:01:42)
+12 passed, 2 deselected, 29 warnings in 102.67s (0:01:42)
 pytest -q -m slow tests/test_sccan_r_comparison.py::TestPythonLSMSCCANEndToEnd
 1 passed, 2 warnings in 75.48s (0:01:15)
 ```
@@ -246,9 +248,11 @@ Use SCCAN as the primary R-like predictive method, especially for continuity wit
 - `r_compatible=True` when comparing with or migrating from R LESYMAP.
 - default Python SVR when you want a conventional scikit-learn linear SVR baseline.
 
-Before claiming full R replacement equivalence, decide whether Python should
-reproduce R SVR permutation p-values and whether exact full-size SCCAN CV
-sparseness matching is required beyond bounded-objective compatibility.
+The Python package is now suitable as a practical replacement for R LESYMAP
+for SCCAN/SVR predictive-model training, checkpointing, and inference when the
+validated limitations above are acceptable. It should not be described as
+bitwise-identical to R for SCCAN weights, R random permutation sequences, or
+full-size CV fold assignment.
 
 ## Remaining Validation Checklist
 

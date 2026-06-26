@@ -78,6 +78,99 @@ result = lesymap.lesymap(
 predictions = result.predict(['new_subject.nii.gz'])
 ```
 
+## Predictive Modeling Workflow
+
+For R-like predictive LESYMAP workflows, use SCCAN as the primary method and
+SVR with `r_compatible=True` when migrating or comparing against the R package.
+
+### SCCAN Training and Inference
+
+```python
+import lesymap
+
+result = lesymap.lesymap(
+    lesions=train_lesion_files,
+    behavior=train_behavior_scores,
+    mask=roi_mask_file,              # optional, but recommended for fixed ROI work
+    method='sccan',
+    sparseness=0.045,                # fixed sparseness for reproducible runs
+    optimize_sparseness=False,       # or True for cross-validation search
+    robust=1,                        # matches R LESYMAP's robust SCCAN intent
+)
+
+result.save('sccan_model/', save_model=True)
+
+model = lesymap.LesymapResult.load_checkpoint(
+    'sccan_model/model_checkpoint.pkl'
+)
+predicted_scores = model.predict(test_lesion_files)
+```
+
+SCCAN predictions are continuous behavior scores. For binary outcomes such as
+mutism `0/1`, treat these as risk scores unless you fit a separate probability
+calibration model.
+
+### R-Compatible SVR Training and Inference
+
+```python
+result = lesymap.lesymap(
+    lesions=train_lesion_files,
+    behavior=train_behavior_scores,
+    mask=roi_mask_file,
+    method='svr',
+    r_compatible=True,               # R-style scaling and R default SVR params
+)
+
+result.save('svr_model/', save_model=True)
+
+model = lesymap.LesymapResult.load_checkpoint(
+    'svr_model/model_checkpoint.pkl'
+)
+predicted_scores = model.predict(test_lesion_files)
+```
+
+With `r_compatible=True`, SVR uses the R LESYMAP defaults unless overridden:
+RBF kernel, `C=30`, `gamma=5`, `epsilon=0.1`, R-style centering/scaling of the
+lesion matrix and behavior, and prediction unscaling back to behavior units.
+
+R-style SVR permutation p-value maps are available, but they are intentionally
+opt-in because they refit the SVR once per permutation:
+
+```python
+result = lesymap.lesymap(
+    lesions=train_lesion_files,
+    behavior=train_behavior_scores,
+    mask=roi_mask_file,
+    method='svr',
+    r_compatible=True,
+    svr_pvalue_method='r_permutation',
+    nperm=1000,
+    random_state=123,
+)
+```
+
+Exact permutation p-values are random-sequence dependent. The Python
+implementation follows the R directional exceedance rule, but NumPy and R do
+not produce identical permutation sequences unless those sequences are saved
+and replayed.
+
+### Binary Outcome Evaluation
+
+```python
+from lesymap.utils.metrics import evaluate_binary_predictions
+
+metrics = evaluate_binary_predictions(
+    y_true=heldout_binary_labels,
+    scores=predicted_scores,
+    threshold='youden',              # choose thresholds inside training folds
+)
+```
+
+Do not threshold SCCAN/SVR scores at `0.5` unless you have calibrated them to
+probabilities. Prefer ROC-AUC, PR-AUC, balanced accuracy, F1, MCC, sensitivity,
+and specificity, with threshold selection performed inside the training data or
+cross-validation folds.
+
 ## Methods
 
 ### Univariate (voxel-wise, patch-accelerated)
@@ -131,8 +224,12 @@ result = lesymap.lesymap(
 | Performance | C++/Rcpp | Numba JIT |
 | Compilation | C++ toolchain required | None |
 | SCCAN | ANTsR (required) | ANTsPy (optional) |
+| SVR R compatibility | e1071 defaults | `r_compatible=True` mode |
 | Model saving | R `.rds` format | pickle/joblib checkpoint |
 | Prediction API | `lesymap.predict()` | `result.predict()` |
+
+See `MULTIVARIATE_R_COMPATIBILITY_REPORT.md` for the current SCCAN/SVR
+R-compatibility validation status and tested limitations.
 
 ## Citation
 
