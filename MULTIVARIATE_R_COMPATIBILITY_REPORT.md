@@ -13,15 +13,15 @@ Current status:
 - Prediction API coverage has improved. SCCAN and SVR now have checkpoint roundtrip tests, including patch-compressed training.
 - Binary behavior such as mutism `0/1` should be treated as a continuous-risk prediction problem first. A fixed `0.5` cutoff is not generally valid unless the output has been calibrated to probability scale.
 
-Fresh verification on `compat/sccan-r-fixtures` before merge:
+Fresh verification on `main` after merge:
 
 ```text
 pytest -q
-112 passed, 2 skipped, 13 deselected, 260 warnings in 3.32s
+114 passed, 13 deselected, 260 warnings in 6.96s
 pytest -q -m slow tests/test_svr_r_comparison.py::TestPythonLSMSVREndToEnd
 2 passed, 5 warnings in 98.17s (0:01:38)
 pytest -q -m slow tests/test_sccan_r_comparison.py::TestPythonLSMSCCANEndToEnd
-1 passed, 2 warnings in 79.19s (0:01:19)
+1 passed, 2 warnings in 75.48s (0:01:15)
 ```
 
 ## SCCAN
