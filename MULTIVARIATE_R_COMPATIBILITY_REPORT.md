@@ -16,15 +16,15 @@ Current status:
   held-out subjects.
 - Binary behavior such as mutism `0/1` should be treated as a continuous-risk prediction problem first. A fixed `0.5` cutoff is not generally valid unless the output has been calibrated to probability scale.
 
-Fresh verification on `compat/testdata-e2e` before merge:
+Fresh verification on `main` after merge:
 
 ```text
 pytest -q
-113 passed, 2 skipped, 15 deselected, 266 warnings in 3.45s
+115 passed, 15 deselected, 266 warnings in 7.63s
 pytest -q tests/test_prediction_roundtrip.py tests/test_multivariate_perf_controls.py
-18 passed, 40 warnings in 1.85s
+18 passed, 40 warnings in 1.90s
 pytest -q -m slow tests/test_testdata_prediction_e2e.py -rs
-2 passed, 4 warnings in 7.16s
+2 passed, 4 warnings in 8.24s
 pytest -q -m slow tests/test_svr_r_comparison.py::TestPythonLSMSVREndToEnd
 2 passed, 5 warnings in 98.17s (0:01:38)
 pytest -q -m slow tests/test_svr_r_comparison.py
