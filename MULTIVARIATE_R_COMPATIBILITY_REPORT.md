@@ -7,21 +7,21 @@ Scope: SCCAN, SVR/SVM, prediction API, and binary behavior evaluation.
 
 Current status:
 
-- SCCAN is the closest path for R-like predictive behavior. Python now has patch-aware checkpoint/prediction tests and a Python-side rank fallback for ANTsPy versions where `robust > 0` is not implemented. Strict Python-vs-R SCCAN numerical equivalence is still not proven.
+- SCCAN is the closest path for R-like predictive behavior. Python now has patch-aware checkpoint/prediction tests, a Python-side rank fallback for ANTsPy versions where `robust > 0` is not implemented, and a true R rerun fixture showing highly correlated calibrated predictions. Exact voxel-weight equality is not claimed.
 - SVR/SVM now has an explicit `r_compatible=True` mode. This mode matches the main R LESYMAP preprocessing/default-parameter shape more closely: R-style centering/scaling, R defaults (`kernel='rbf'`, `C=30`, `gamma=5`, `epsilon=0.1`), prediction unscaling, and R-style `10 / max(abs(w))` statistic scaling for linear SVR.
 - Standard Python SVR remains intentionally Pythonic by default: `kernel='linear'`, `C=1.0`, `epsilon=0.1`, no internal R scaling. This avoids silently changing existing users' results.
 - Prediction API coverage has improved. SCCAN and SVR now have checkpoint roundtrip tests, including patch-compressed training.
 - Binary behavior such as mutism `0/1` should be treated as a continuous-risk prediction problem first. A fixed `0.5` cutoff is not generally valid unless the output has been calibrated to probability scale.
 
-Fresh verification on `main` after merge:
+Fresh verification on `compat/sccan-r-fixtures` before merge:
 
 ```text
 pytest -q
-114 passed, 12 deselected, 258 warnings in 7.01s
+112 passed, 2 skipped, 13 deselected, 260 warnings in 3.32s
 pytest -q -m slow tests/test_svr_r_comparison.py::TestPythonLSMSVREndToEnd
 2 passed, 5 warnings in 98.17s (0:01:38)
 pytest -q -m slow tests/test_sccan_r_comparison.py::TestPythonLSMSCCANEndToEnd
-1 passed, 2 warnings in 80.70s (0:01:20)
+1 passed, 2 warnings in 79.19s (0:01:19)
 ```
 
 ## SCCAN
