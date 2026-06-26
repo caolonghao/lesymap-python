@@ -61,3 +61,7 @@ select = ["E", "F", "W", "I", "N", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+addopts = "-m 'not slow'"
+markers = [
+    "slow: tests that are too expensive for the default local/CI suite",
+]

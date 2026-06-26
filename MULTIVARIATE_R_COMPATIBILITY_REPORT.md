@@ -17,7 +17,9 @@ Fresh verification on `main` after merge:
 
 ```text
 pytest -q
-120 passed, 246 warnings in 118.87s (0:01:58)
+114 passed, 12 deselected, 258 warnings in 7.01s
+pytest -q -m slow tests/test_svr_r_comparison.py::TestPythonLSMSVREndToEnd
+2 passed, 5 warnings in 98.17s (0:01:38)
 ```
 
 ## SCCAN
@@ -108,13 +110,20 @@ shape as R LESYMAP.
   - SVR prediction survives checkpoint save/load,
   - SVR prediction works when training used patch compression,
   - R-compatible SVR stores scaling parameters and unscales predictions correctly after checkpoint load.
+- `tests/test_svr_r_comparison.py::TestPythonLSMSVREndToEnd` now calls project
+  `lsm_svr()` directly on the existing R-style reference matrix:
+  - linear `r_compatible=True` matches R-style predictions, raw weights, and beta-scaled statistics to tight tolerance,
+  - default RBF `r_compatible=True` matches behavior correlation and support-vector-projection statistic to high correlation with small numerical tolerance.
+- `tests/test_svr_r_comparison.py::TestTinyTrueRLSMSVRReference` now compares
+  Python `lsm_svr()` against true R `lsm_svr()` outputs on a small generated
+  fixture for both linear and default RBF kernels. This runs in the default test
+  suite and checks statistic vectors plus valid R permutation p-values.
 
 ### What Is Not Yet Strictly Verified
 
-- R fixture tests for SVR currently skip because R reference fixture files are not present in the branch.
-- Existing `tests/test_svr_r_comparison.py` compares direct sklearn/e1071 behavior on pre-scaled fixture data when fixtures exist; it is not a full Python `lsm_svr()` vs R `lsm_svr()` end-to-end test.
-- RBF statistic/weight maps now use the same support-vector projection shape as R-compatible linear maps, but they have not yet been numerically compared against true R `lsm_svr()` outputs.
-- Permutation p-values and R output object metadata still need true end-to-end R fixture comparison.
+- `tests/generate_r_svr_reference.R` now includes true R `lsm_svr()` method-level outputs (`svr_lsm_linear_results.csv`, `svr_lsm_radial_results.csv`), but those new fixture files have not yet been regenerated into the repository.
+- `tests/test_svr_r_comparison.py::TestTrueRLSMSVRReference` will compare Python `lsm_svr()` against large true R `lsm_svr()` statistic/pvalue vectors once those new CSV files exist; it is marked `slow` and currently skips when they are absent.
+- Large-fixture permutation p-values and R output object metadata still need true end-to-end R fixture comparison.
 
 ## Binary Behavior Evaluation
 

@@ -25,10 +25,12 @@ Python lsm_svr workflow:
 import pytest
 import numpy as np
 import pandas as pd
+import nibabel as nib
 from pathlib import Path
 from scipy.stats import pearsonr
 from sklearn.svm import SVR
-from sklearn.preprocessing import StandardScaler
+
+from lesymap.methods.multivariate import lsm_svr
 
 # Path to R reference data
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "r_reference_results"
@@ -56,7 +58,33 @@ def load_r_reference_data():
     data['radial_correlation'] = radial_pred['correlation'].values[0]
     data['radial_weights'] = pd.read_csv(FIXTURES_DIR / "svr_radial_weights.csv")['weights'].values
 
+    lsm_linear = FIXTURES_DIR / "svr_lsm_linear_results.csv"
+    lsm_radial = FIXTURES_DIR / "svr_lsm_radial_results.csv"
+    if lsm_linear.exists():
+        data['lsm_linear'] = pd.read_csv(lsm_linear)
+    if lsm_radial.exists():
+        data['lsm_radial'] = pd.read_csv(lsm_radial)
+
     return data
+
+
+def _vector_mask(n_voxels):
+    return nib.Nifti1Image(np.ones((n_voxels, 1, 1), dtype=np.uint8), np.eye(4))
+
+
+def _r_beta_scaled(weights):
+    max_abs = np.max(np.abs(weights))
+    return weights * (10.0 / max_abs)
+
+
+def load_tiny_lsm_svr_reference_data():
+    """Load small true R lsm_svr fixtures."""
+    return {
+        'lesmat': pd.read_csv(FIXTURES_DIR / "svr_tiny_lesmat.csv").values,
+        'behavior': pd.read_csv(FIXTURES_DIR / "svr_tiny_behavior.csv")['behavior'].values,
+        'linear': pd.read_csv(FIXTURES_DIR / "svr_tiny_lsm_linear_results.csv"),
+        'radial': pd.read_csv(FIXTURES_DIR / "svr_tiny_lsm_radial_results.csv"),
+    }
 
 
 @pytest.fixture(scope="module")
@@ -71,21 +99,75 @@ def r_data():
         pytest.skip(f"Failed to load R reference data: {e}")
 
 
+@pytest.fixture(scope="module")
+def tiny_lsm_svr_data():
+    required = [
+        "svr_tiny_lesmat.csv",
+        "svr_tiny_behavior.csv",
+        "svr_tiny_lsm_linear_results.csv",
+        "svr_tiny_lsm_radial_results.csv",
+    ]
+    missing = [f for f in required if not (FIXTURES_DIR / f).exists()]
+    if missing:
+        pytest.skip(
+            "Missing tiny true R lsm_svr fixtures: "
+            + ", ".join(missing)
+            + ". Run tests/generate_r_svr_tiny_reference.R first."
+        )
+    return load_tiny_lsm_svr_reference_data()
+
+
+@pytest.fixture(scope="module")
+def sklearn_svr_models(r_data):
+    """Fit direct sklearn SVR models once for the module."""
+    linear = SVR(kernel='linear', C=1.0, epsilon=0.1)
+    linear.fit(r_data['lesmat_scaled'], r_data['behavior_scaled'])
+
+    rbf = SVR(kernel='rbf', C=30, gamma=5, epsilon=0.1)
+    rbf.fit(r_data['lesmat_scaled'], r_data['behavior_scaled'])
+
+    return {'linear': linear, 'rbf': rbf}
+
+
+@pytest.fixture(scope="module")
+def python_lsm_svr_results(r_data):
+    """Run Python lsm_svr r_compatible models once for the module."""
+    lesmat = r_data['lesmat']
+    behavior = r_data['behavior']
+    mask = _vector_mask(lesmat.shape[1])
+
+    linear = lsm_svr(
+        lesmat,
+        behavior,
+        mask,
+        r_compatible=True,
+        kernel='linear',
+        C=1.0,
+        epsilon=0.1,
+        show_info=False,
+    )
+    rbf = lsm_svr(
+        lesmat,
+        behavior,
+        mask,
+        r_compatible=True,
+        show_info=False,
+    )
+    return {'linear': linear, 'rbf': rbf}
+
+
+@pytest.mark.slow
 class TestSVRLinearKernel:
     """Test SVR with linear kernel against R reference."""
 
-    def test_predictions_correlation(self, r_data):
+    def test_predictions_correlation(self, r_data, sklearn_svr_models):
         """Test that Python SVR predictions correlate highly with R predictions."""
         # Use pre-scaled data (as R does)
         lesmat_scaled = r_data['lesmat_scaled']
         behavior_scaled = r_data['behavior_scaled']
 
-        # Fit Python SVR with same parameters as R
-        svr = SVR(kernel='linear', C=1.0, epsilon=0.1)
-        svr.fit(lesmat_scaled, behavior_scaled)
-
         # Get predictions
-        py_predictions = svr.predict(lesmat_scaled)
+        py_predictions = sklearn_svr_models['linear'].predict(lesmat_scaled)
         r_predictions = r_data['linear_predictions']
 
         # Compare predictions
@@ -100,17 +182,11 @@ class TestSVRLinearKernel:
         assert corr > 0.95, f"Prediction correlation {corr:.4f} < 0.95"
         print("PASS: Prediction correlation > 0.95")
 
-    def test_weights_correlation(self, r_data):
+    def test_weights_correlation(self, r_data, sklearn_svr_models):
         """Test that Python SVR weights correlate highly with R weights."""
         lesmat_scaled = r_data['lesmat_scaled']
-        behavior_scaled = r_data['behavior_scaled']
-
-        # Fit Python SVR
-        svr = SVR(kernel='linear', C=1.0, epsilon=0.1)
-        svr.fit(lesmat_scaled, behavior_scaled)
-
         # Get Python weights (for linear kernel)
-        py_weights = svr.coef_.flatten()
+        py_weights = sklearn_svr_models['linear'].coef_.flatten()
 
         # R computes weights as: w = t(svr$coefs) %*% svr$SV
         # sklearn linear kernel gives coef_ directly
@@ -128,17 +204,13 @@ class TestSVRLinearKernel:
         assert corr > 0.95, f"Weight correlation {corr:.4f} < 0.95"
         print("PASS: Weight correlation > 0.95")
 
-    def test_behavior_correlation(self, r_data):
+    def test_behavior_correlation(self, r_data, sklearn_svr_models):
         """Test that Python SVR achieves similar correlation with behavior."""
         lesmat_scaled = r_data['lesmat_scaled']
         behavior_scaled = r_data['behavior_scaled']
 
-        # Fit Python SVR
-        svr = SVR(kernel='linear', C=1.0, epsilon=0.1)
-        svr.fit(lesmat_scaled, behavior_scaled)
-
         # Get correlations
-        py_predictions = svr.predict(lesmat_scaled)
+        py_predictions = sklearn_svr_models['linear'].predict(lesmat_scaled)
         py_corr, _ = pearsonr(py_predictions, behavior_scaled)
         r_corr = r_data['linear_correlation']
 
@@ -152,21 +224,17 @@ class TestSVRLinearKernel:
         print("PASS: Correlation difference < 0.01")
 
 
+@pytest.mark.slow
 class TestSVRRadialKernel:
     """Test SVR with radial (RBF) kernel against R reference."""
 
-    def test_predictions_correlation(self, r_data):
+    def test_predictions_correlation(self, r_data, sklearn_svr_models):
         """Test that Python SVR RBF predictions correlate with R predictions."""
         lesmat_scaled = r_data['lesmat_scaled']
         behavior_scaled = r_data['behavior_scaled']
 
-        # Fit Python SVR with R's default parameters
-        # R: cost=30, gamma=5, epsilon=0.1
-        svr = SVR(kernel='rbf', C=30, gamma=5, epsilon=0.1)
-        svr.fit(lesmat_scaled, behavior_scaled)
-
         # Get predictions
-        py_predictions = svr.predict(lesmat_scaled)
+        py_predictions = sklearn_svr_models['rbf'].predict(lesmat_scaled)
         r_predictions = r_data['radial_predictions']
 
         # Compare predictions
@@ -181,17 +249,13 @@ class TestSVRRadialKernel:
         assert corr > 0.95, f"Prediction correlation {corr:.4f} < 0.95"
         print("PASS: Prediction correlation > 0.95")
 
-    def test_behavior_correlation(self, r_data):
+    def test_behavior_correlation(self, r_data, sklearn_svr_models):
         """Test that Python RBF SVR achieves similar correlation with behavior."""
         lesmat_scaled = r_data['lesmat_scaled']
         behavior_scaled = r_data['behavior_scaled']
 
-        # Fit Python SVR with R's default parameters
-        svr = SVR(kernel='rbf', C=30, gamma=5, epsilon=0.1)
-        svr.fit(lesmat_scaled, behavior_scaled)
-
         # Get correlations
-        py_predictions = svr.predict(lesmat_scaled)
+        py_predictions = sklearn_svr_models['rbf'].predict(lesmat_scaled)
         py_corr, _ = pearsonr(py_predictions, behavior_scaled)
         r_corr = r_data['radial_correlation']
 
@@ -205,6 +269,124 @@ class TestSVRRadialKernel:
         print("PASS: Correlation difference < 0.01")
 
 
+@pytest.mark.slow
+class TestPythonLSMSVREndToEnd:
+    """Test Python lsm_svr r_compatible mode against R-style reference outputs."""
+
+    def test_lsm_svr_linear_matches_r_reference(self, r_data, python_lsm_svr_results):
+        result = python_lsm_svr_results['linear']
+
+        py_weights = result.raw_weights_img.get_fdata().reshape(-1)
+        py_statistic = result.stat_img.get_fdata().reshape(-1)
+        r_weights = r_data['linear_weights']
+        r_statistic = _r_beta_scaled(r_weights)
+
+        assert result.model_params['r_compatible'] is True
+        assert result.model_params['kernel'] == 'linear'
+        assert abs(result.model_params['correlation'] - r_data['linear_correlation']) < 1e-10
+        np.testing.assert_allclose(py_weights, r_weights, rtol=1e-8, atol=1e-8)
+        np.testing.assert_allclose(py_statistic, r_statistic, rtol=1e-8, atol=1e-8)
+
+    def test_lsm_svr_rbf_matches_r_reference(self, r_data, python_lsm_svr_results):
+        result = python_lsm_svr_results['rbf']
+
+        py_weights = result.raw_weights_img.get_fdata().reshape(-1)
+        py_statistic = result.stat_img.get_fdata().reshape(-1)
+        r_weights = r_data['radial_weights']
+        r_statistic = _r_beta_scaled(r_weights)
+
+        weight_corr, _ = pearsonr(py_weights, r_weights)
+        stat_corr, _ = pearsonr(py_statistic, r_statistic)
+
+        assert result.model_params['r_compatible'] is True
+        assert result.model_params['kernel'] == 'rbf'
+        assert result.model_params['C'] == 30.0
+        assert result.model_params['gamma'] == 5.0
+        assert abs(result.model_params['correlation'] - r_data['radial_correlation']) < 1e-5
+        assert weight_corr > 0.999999
+        assert stat_corr > 0.999999
+        np.testing.assert_allclose(py_statistic, r_statistic, rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.slow
+class TestTrueRLSMSVRReference:
+    """Compare Python lsm_svr with true R LESYMAP lsm_svr outputs when present."""
+
+    def test_lsm_svr_linear_matches_true_r_lsm_svr(self, r_data, python_lsm_svr_results):
+        if 'lsm_linear' not in r_data:
+            pytest.skip("Missing svr_lsm_linear_results.csv; regenerate R SVR reference fixtures")
+
+        result = python_lsm_svr_results['linear']
+
+        r_statistic = r_data['lsm_linear']['statistic'].values
+        r_pvalue = r_data['lsm_linear']['pvalue'].values
+        py_statistic = result.stat_img.get_fdata().reshape(-1)
+
+        np.testing.assert_allclose(py_statistic, r_statistic, rtol=1e-8, atol=1e-8)
+        assert np.all((r_pvalue >= 0) & (r_pvalue <= 1))
+
+    def test_lsm_svr_rbf_matches_true_r_lsm_svr(self, r_data, python_lsm_svr_results):
+        if 'lsm_radial' not in r_data:
+            pytest.skip("Missing svr_lsm_radial_results.csv; regenerate R SVR reference fixtures")
+
+        result = python_lsm_svr_results['rbf']
+
+        r_statistic = r_data['lsm_radial']['statistic'].values
+        r_pvalue = r_data['lsm_radial']['pvalue'].values
+        py_statistic = result.stat_img.get_fdata().reshape(-1)
+        stat_corr, _ = pearsonr(py_statistic, r_statistic)
+
+        assert stat_corr > 0.999999
+        np.testing.assert_allclose(py_statistic, r_statistic, rtol=1e-3, atol=1e-3)
+        assert np.all((r_pvalue >= 0) & (r_pvalue <= 1))
+
+
+class TestTinyTrueRLSMSVRReference:
+    """Fast true R lsm_svr end-to-end comparison on a tiny fixture."""
+
+    def test_lsm_svr_linear_matches_tiny_true_r_lsm_svr(self, tiny_lsm_svr_data):
+        lesmat = tiny_lsm_svr_data['lesmat']
+        behavior = tiny_lsm_svr_data['behavior']
+
+        result = lsm_svr(
+            lesmat,
+            behavior,
+            _vector_mask(lesmat.shape[1]),
+            r_compatible=True,
+            kernel='linear',
+            C=1.0,
+            epsilon=0.1,
+            show_info=False,
+        )
+
+        r_statistic = tiny_lsm_svr_data['linear']['statistic'].values
+        r_pvalue = tiny_lsm_svr_data['linear']['pvalue'].values
+        py_statistic = result.stat_img.get_fdata().reshape(-1)
+
+        np.testing.assert_allclose(py_statistic, r_statistic, rtol=1e-8, atol=1e-8)
+        assert np.all((r_pvalue >= 0) & (r_pvalue <= 1))
+
+    def test_lsm_svr_rbf_matches_tiny_true_r_lsm_svr(self, tiny_lsm_svr_data):
+        lesmat = tiny_lsm_svr_data['lesmat']
+        behavior = tiny_lsm_svr_data['behavior']
+
+        result = lsm_svr(
+            lesmat,
+            behavior,
+            _vector_mask(lesmat.shape[1]),
+            r_compatible=True,
+            show_info=False,
+        )
+
+        r_statistic = tiny_lsm_svr_data['radial']['statistic'].values
+        r_pvalue = tiny_lsm_svr_data['radial']['pvalue'].values
+        py_statistic = result.stat_img.get_fdata().reshape(-1)
+
+        np.testing.assert_allclose(py_statistic, r_statistic, rtol=1e-8, atol=1e-8)
+        assert np.all((r_pvalue >= 0) & (r_pvalue <= 1))
+
+
+@pytest.mark.slow
 class TestSVRDataLoading:
     """Test that R reference data was loaded correctly."""
 
@@ -242,6 +424,7 @@ class TestSVRDataLoading:
         print("PASS: Scaling verified")
 
 
+@pytest.mark.slow
 def test_summary(r_data):
     """Print summary of all tests."""
     print("\n" + "=" * 60)

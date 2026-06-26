@@ -1,6 +1,9 @@
-# Generate R SVR reference data for Python comparison testing
-# This script runs SVR analysis using LESYMAP's lsm_svr function
-# and saves reference data for validating the Python implementation.
+# Generate R SVR reference data for Python comparison testing.
+#
+# This script saves two kinds of reference data:
+# 1. Method-level LESYMAP lsm_svr() outputs for end-to-end method comparison.
+# 2. Direct e1071::svm diagnostics with predictions/support-vector weights for
+#    debugging numerical differences between R and scikit-learn/libsvm.
 
 library(LESYMAP)
 library(ANTsR)
@@ -127,6 +130,34 @@ w_radial <- as.vector(w_radial)
 betaScale_radial <- 10 / max(abs(w_radial))
 statistic_radial <- w_radial * betaScale_radial
 
+# Run true LESYMAP lsm_svr() method-level references. Use SVR.nperm=1 so the
+# permutation p-value path is deterministic and cheap. Do not use 0: in R,
+# 1:0 evaluates to c(1, 0), so the original loop would still run.
+cat("\n=== Running LESYMAP lsm_svr method-level references ===\n")
+set.seed(42)
+lsm_svr_linear <- lsm_svr(
+  lesmat = lesmat,
+  behavior = behavior,
+  SVR.nperm = 1,
+  SVR.kernel = "linear",
+  SVR.gamma = 5,
+  SVR.cost = 1,
+  SVR.epsilon = 0.1,
+  showInfo = FALSE
+)
+
+set.seed(42)
+lsm_svr_radial <- lsm_svr(
+  lesmat = lesmat,
+  behavior = behavior,
+  SVR.nperm = 1,
+  SVR.kernel = "radial",
+  SVR.gamma = 5,
+  SVR.cost = 30,
+  SVR.epsilon = 0.1,
+  showInfo = FALSE
+)
+
 # Save reference data
 cat("\nSaving reference data...\n")
 
@@ -192,6 +223,17 @@ write.csv(data.frame(
 write.csv(data.frame(weights = w_radial),
           file.path(output_dir, "svr_radial_weights.csv"), row.names = FALSE)
 
+# Save true lsm_svr method-level outputs.
+write.csv(data.frame(
+  statistic = as.vector(lsm_svr_linear$statistic),
+  pvalue = as.vector(lsm_svr_linear$pvalue)
+), file.path(output_dir, "svr_lsm_linear_results.csv"), row.names = FALSE)
+
+write.csv(data.frame(
+  statistic = as.vector(lsm_svr_radial$statistic),
+  pvalue = as.vector(lsm_svr_radial$pvalue)
+), file.path(output_dir, "svr_lsm_radial_results.csv"), row.names = FALSE)
+
 # Save metadata
 metadata <- list(
   r_version = as.character(getRversion()),
@@ -224,4 +266,6 @@ cat("  - svr_linear_predictions.csv\n")
 cat("  - svr_linear_weights.csv\n")
 cat("  - svr_radial_predictions.csv\n")
 cat("  - svr_radial_weights.csv\n")
+cat("  - svr_lsm_linear_results.csv\n")
+cat("  - svr_lsm_radial_results.csv\n")
 cat("  - svr_metadata.rds\n")

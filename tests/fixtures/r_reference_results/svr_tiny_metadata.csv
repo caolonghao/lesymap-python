@@ -1,0 +1,2 @@
+"seed","n_subjects","n_voxels","SVR_nperm","linear_cost","radial_cost","gamma","epsilon","e1071_version"
+123,8,6,1,1,30,5,0.1,"1.7.17"
