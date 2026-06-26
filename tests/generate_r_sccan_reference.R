@@ -25,6 +25,8 @@ if (!dir.exists(output_dir)) {
   dir.create(output_dir, recursive = TRUE)
 }
 
+run_sccan_cv <- identical(Sys.getenv("RUN_SCCAN_CV"), "1")
+
 # Load example data from LESYMAP
 lesydata <- file.path(find.package('LESYMAP'), 'extdata')
 filenames <- Sys.glob(file.path(lesydata, 'lesions', '*.nii.gz'))
@@ -120,49 +122,53 @@ write.csv(data.frame(eig1 = eig1_raw), file.path(output_dir, "test1_eig1_raw.csv
 # Save statistic vector
 write.csv(data.frame(statistic = result1$statistic), file.path(output_dir, "test1_statistic.csv"), row.names = FALSE)
 
-# ============================================================
-# TEST 2: With sparseness validation (CV)
-# ============================================================
-cat("\n=== Test 2: Fixed sparseness (0.1) with CV validation ===\n")
+if (run_sccan_cv) {
+  # ============================================================
+  # TEST 2: With sparseness validation (CV)
+  # ============================================================
+  cat("\n=== Test 2: Fixed sparseness (0.1) with CV validation ===\n")
 
-result2 <- lsm_sccan(
-  lesmat = lesmat,
-  behavior = behavior,
-  mask = mask,
-  optimizeSparseness = FALSE,
-  validateSparseness = TRUE,
-  sparseness = fixed_sparseness,
-  showInfo = TRUE,
-  cthresh = 150,
-  its = 20,
-  smooth = 0.4,
-  robust = 1,
-  mycoption = 1,
-  maxBased = FALSE,
-  directionalSCCAN = TRUE
-)
+  result2 <- lsm_sccan(
+    lesmat = lesmat,
+    behavior = behavior,
+    mask = mask,
+    optimizeSparseness = FALSE,
+    validateSparseness = TRUE,
+    sparseness = fixed_sparseness,
+    showInfo = TRUE,
+    cthresh = 150,
+    its = 20,
+    smooth = 0.4,
+    robust = 1,
+    mycoption = 1,
+    maxBased = FALSE,
+    directionalSCCAN = TRUE
+  )
 
-cat("\n--- Results ---\n")
-cat("CV correlation:", result2$CVcorrelation.stat, "\n")
-cat("CV p-value:", result2$CVcorrelation.pval, "\n")
+  cat("\n--- Results ---\n")
+  cat("CV correlation:", result2$CVcorrelation.stat, "\n")
+  cat("CV p-value:", result2$CVcorrelation.pval, "\n")
 
-# Save CV validation results
-metadata2 <- list(
-  sparseness = fixed_sparseness,
-  cv_correlation = result2$CVcorrelation.stat,
-  cv_pvalue = result2$CVcorrelation.pval
-)
-saveRDS(metadata2, file.path(output_dir, "test2_metadata.rds"))
-
-write.csv(
-  data.frame(
+  # Save CV validation results
+  metadata2 <- list(
     sparseness = fixed_sparseness,
     cv_correlation = result2$CVcorrelation.stat,
     cv_pvalue = result2$CVcorrelation.pval
-  ),
-  file.path(output_dir, "test2_metadata.csv"),
-  row.names = FALSE
-)
+  )
+  saveRDS(metadata2, file.path(output_dir, "test2_metadata.rds"))
+
+  write.csv(
+    data.frame(
+      sparseness = fixed_sparseness,
+      cv_correlation = result2$CVcorrelation.stat,
+      cv_pvalue = result2$CVcorrelation.pval
+    ),
+    file.path(output_dir, "test2_metadata.csv"),
+    row.names = FALSE
+  )
+} else {
+  cat("\n=== Test 2: CV validation skipped. Set RUN_SCCAN_CV=1 to enable. ===\n")
+}
 
 # ============================================================
 # TEST 3: Data scaling verification
@@ -258,7 +264,7 @@ antsImageWrite(mask, file.path(output_dir, "mask.nii.gz"))
 # Full analysis inputs for Python-vs-R reruns. These are intentionally saved
 # after the R outputs so tests can call Python lsm_sccan() on exactly the same
 # matrix/behavior/mask that produced the reference maps.
-write.csv(lesmat, file.path(output_dir, "sccan_lesmat.csv"), row.names = FALSE)
+write.csv(lesmat, gzfile(file.path(output_dir, "sccan_lesmat.csv.gz")), row.names = FALSE)
 write.csv(
   data.frame(behavior = behavior),
   file.path(output_dir, "sccan_behavior.csv"),

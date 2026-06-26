@@ -102,19 +102,26 @@ def load_r_reference_data():
     data['statistic'] = pd.read_csv(FIXTURES_DIR / "test1_statistic.csv")['statistic'].values
 
     optional_files = {
-        'lesmat': "sccan_lesmat.csv",
+        'lesmat': ("sccan_lesmat.csv.gz", "sccan_lesmat.csv"),
         'behavior': "sccan_behavior.csv",
-        'mask_vector': "sccan_mask_vector.csv",
+        'mask_img': "mask.nii.gz",
         'predictions': "test4_predictions.csv",
     }
     for key, filename in optional_files.items():
-        path = FIXTURES_DIR / filename
+        if isinstance(filename, tuple):
+            path = next((FIXTURES_DIR / item for item in filename if (FIXTURES_DIR / item).exists()), None)
+            if path is None:
+                continue
+        else:
+            path = FIXTURES_DIR / filename
         if path.exists():
+            if key == 'mask_img':
+                data[key] = nib.load(path)
+                continue
+
             frame = pd.read_csv(path)
             if key == 'behavior':
                 data[key] = frame['behavior'].values
-            elif key == 'mask_vector':
-                data[key] = frame['mask'].values.astype(bool)
             elif key == 'lesmat':
                 data[key] = frame.values
             else:
@@ -348,7 +355,7 @@ class TestPythonLSMSCCANEndToEnd:
     """Run Python lsm_sccan on the same matrix used by R reference generation."""
 
     def test_lsm_sccan_matches_r_reference_when_inputs_available(self, r_data):
-        required = ['lesmat', 'behavior', 'mask_vector', 'predictions']
+        required = ['lesmat', 'behavior', 'mask_img', 'predictions']
         missing = [key for key in required if key not in r_data]
         if missing:
             pytest.skip(
@@ -359,8 +366,8 @@ class TestPythonLSMSCCANEndToEnd:
 
         lesmat = r_data['lesmat']
         behavior = r_data['behavior']
-        mask_vector = r_data['mask_vector']
-        mask_img = nib.Nifti1Image(mask_vector.astype(float).reshape(-1, 1, 1), np.eye(4))
+        mask_img = r_data['mask_img']
+        mask_vector = mask_img.get_fdata().reshape(-1) > 0
 
         result = lsm_sccan(
             lesmat,
@@ -382,17 +389,26 @@ class TestPythonLSMSCCANEndToEnd:
 
         py_statistic = result.stat_img.get_fdata().reshape(-1)[mask_vector]
         r_statistic = r_data['statistic']
+        mask_shape = mask_img.shape
+        full_space_rows = []
+        for row in lesmat:
+            full_row = np.zeros(mask_shape, dtype=np.float32).reshape(-1)
+            full_row[mask_vector] = row.astype(np.float32)
+            full_space_rows.append(full_row)
         py_predictions = result.predict([
-            nib.Nifti1Image(row.reshape(-1, 1, 1), np.eye(4))
-            for row in lesmat
+            nib.Nifti1Image(row.reshape(mask_shape), mask_img.affine)
+            for row in full_space_rows
         ])
         r_predictions = r_data['predictions']['pred_calibrated'].values
 
         stat_corr, _ = pearsonr(py_statistic, r_statistic)
+        aligned_stat_corr = abs(stat_corr)
         pred_corr, _ = pearsonr(py_predictions, r_predictions)
 
         assert result.model_params['robust'] == 1
-        assert stat_corr > 0.75
+        # SCCAN/CCA eigenvectors can differ by a global sign while preserving
+        # the same prediction after the saved calibration model is applied.
+        assert aligned_stat_corr > 0.75
         assert pred_corr > 0.75
         assert abs(np.count_nonzero(py_statistic) - np.count_nonzero(r_statistic)) / len(r_statistic) < 0.1
 
