@@ -17,9 +17,9 @@ R lsm_svr workflow:
 5. Run permutations for p-values
 
 Python lsm_svr workflow:
-1. Fit sklearn.SVR (no scaling by default)
-2. For linear kernel: weights = svr.coef_
-3. For non-linear: use permutation importance
+1. In r_compatible mode, scale lesmat and behavior like R scale()
+2. Fit sklearn.SVR with R-compatible defaults when parameters are not provided
+3. Compute support-vector projection weights and R beta-scaled statistics
 """
 
 import pytest
@@ -36,15 +36,26 @@ from lesymap.methods.multivariate import lsm_svr
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "r_reference_results"
 
 
+def _fixture_path(*names):
+    for name in names:
+        path = FIXTURES_DIR / name
+        if path.exists():
+            return path
+    raise FileNotFoundError(f"Missing fixture file; tried: {', '.join(names)}")
+
+
 def load_r_reference_data():
     """Load R reference data from CSV files."""
     data = {}
 
     # Load input data
-    data['lesmat'] = pd.read_csv(FIXTURES_DIR / "svr_lesmat.csv").values
-    data['lesmat_scaled'] = pd.read_csv(FIXTURES_DIR / "svr_lesmat_scaled.csv").values
+    data['lesmat'] = pd.read_csv(_fixture_path("svr_lesmat.csv.gz", "svr_lesmat.csv")).values
+    data['lesmat_scaled'] = pd.read_csv(
+        _fixture_path("svr_lesmat_scaled.csv.gz", "svr_lesmat_scaled.csv")
+    ).values
     data['behavior'] = pd.read_csv(FIXTURES_DIR / "svr_behavior.csv")['behavior'].values
     data['behavior_scaled'] = pd.read_csv(FIXTURES_DIR / "svr_behavior_scaled.csv")['behavior_scaled'].values
+    data['manifest'] = pd.read_csv(FIXTURES_DIR / "svr_manifest.csv").iloc[0]
 
     # Load linear kernel results
     linear_pred = pd.read_csv(FIXTURES_DIR / "svr_linear_predictions.csv")
@@ -58,12 +69,23 @@ def load_r_reference_data():
     data['radial_correlation'] = radial_pred['correlation'].values[0]
     data['radial_weights'] = pd.read_csv(FIXTURES_DIR / "svr_radial_weights.csv")['weights'].values
 
-    lsm_linear = FIXTURES_DIR / "svr_lsm_linear_results.csv"
-    lsm_radial = FIXTURES_DIR / "svr_lsm_radial_results.csv"
+    lsm_linear = _fixture_path("svr_lsm_linear_results.csv.gz", "svr_lsm_linear_results.csv")
+    lsm_radial = _fixture_path("svr_lsm_radial_results.csv.gz", "svr_lsm_radial_results.csv")
     if lsm_linear.exists():
         data['lsm_linear'] = pd.read_csv(lsm_linear)
     if lsm_radial.exists():
         data['lsm_radial'] = pd.read_csv(lsm_radial)
+
+    n_subjects = int(data['manifest']['n_subjects'])
+    n_voxels = int(data['manifest']['n_voxels'])
+    assert data['lesmat'].shape == (n_subjects, n_voxels)
+    assert data['lesmat_scaled'].shape == (n_subjects, n_voxels)
+    assert len(data['behavior']) == n_subjects
+    assert len(data['behavior_scaled']) == n_subjects
+    assert len(data['linear_weights']) == n_voxels
+    assert len(data['radial_weights']) == n_voxels
+    assert len(data['lsm_linear']) == n_voxels
+    assert len(data['lsm_radial']) == n_voxels
 
     return data
 
@@ -392,8 +414,8 @@ class TestSVRDataLoading:
 
     def test_data_dimensions(self, r_data):
         """Verify data dimensions match expected values."""
-        n_subjects = 50
-        n_voxels = 378254  # From R output
+        n_subjects = int(r_data['manifest']['n_subjects'])
+        n_voxels = int(r_data['manifest']['n_voxels'])
 
         print(f"\n=== Data Dimensions ===")
         print(f"lesmat shape: {r_data['lesmat'].shape}")

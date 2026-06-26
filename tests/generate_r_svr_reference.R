@@ -10,6 +10,7 @@ library(ANTsR)
 
 # Set seed for reproducibility
 set.seed(42)
+run_true_lsm_only <- identical(Sys.getenv("RUN_TRUE_LSM_ONLY"), "1")
 
 # Output directory
 output_dir <- "/data/r_reference_results"
@@ -70,65 +71,69 @@ behavior_scale <- attr(behavior_scaled, "scaled:scale")
 lesmat_center <- attr(lesmat_scaled, "scaled:center")
 lesmat_scale <- attr(lesmat_scaled, "scaled:scale")
 
-# Run SVR with LINEAR kernel for coefficient comparison
-# Note: R defaults are radial kernel with cost=30, gamma=5
-# For comparison with Python sklearn, we use linear kernel
-cat("\n=== Running SVR with LINEAR kernel (for Python comparison) ===\n")
-cat("Parameters: kernel=linear, cost=1, epsilon=0.1\n")
-
 # Install e1071 if not available
 if (!require("e1071", quietly = TRUE)) {
   install.packages("e1071", repos = "https://cloud.r-project.org")
   library(e1071)
 }
 
-svr_linear <- svm(x = lesmat_scaled,
-                  y = as.vector(behavior_scaled),
-                  scale = FALSE,  # Already scaled
-                  type = 'eps-regression',
-                  kernel = 'linear',
-                  cost = 1,  # Match sklearn default
-                  epsilon = 0.1)
+if (!run_true_lsm_only) {
+  # Run SVR with LINEAR kernel for coefficient comparison
+  # Note: R defaults are radial kernel with cost=30, gamma=5
+  # For comparison with Python sklearn, we use linear kernel
+  cat("\n=== Running SVR with LINEAR kernel (for Python comparison) ===\n")
+  cat("Parameters: kernel=linear, cost=1, epsilon=0.1\n")
 
-# Get predictions
-pred_linear <- predict(svr_linear, lesmat_scaled)
+  svr_linear <- svm(x = lesmat_scaled,
+                    y = as.vector(behavior_scaled),
+                    scale = FALSE,  # Already scaled
+                    type = 'eps-regression',
+                    kernel = 'linear',
+                    cost = 1,  # Match sklearn default
+                    epsilon = 0.1)
 
-# Correlation with scaled behavior
-corr_linear <- cor(pred_linear, behavior_scaled)
-cat(sprintf("Linear SVR correlation (scaled): %.6f\n", corr_linear))
+  # Get predictions
+  pred_linear <- predict(svr_linear, lesmat_scaled)
 
-# Get weights for linear kernel
-# For linear kernel: w = t(coefs) %*% SV
-w_linear <- t(svr_linear$coefs) %*% svr_linear$SV
-w_linear <- as.vector(w_linear)
+  # Correlation with scaled behavior
+  corr_linear <- cor(pred_linear, behavior_scaled)
+  cat(sprintf("Linear SVR correlation (scaled): %.6f\n", corr_linear))
 
-cat(sprintf("Linear kernel weights: min=%.6f, max=%.6f\n",
-            min(w_linear), max(w_linear)))
+  # Get weights for linear kernel
+  # For linear kernel: w = t(coefs) %*% SV
+  w_linear <- t(svr_linear$coefs) %*% svr_linear$SV
+  w_linear <- as.vector(w_linear)
 
-# Also run with RADIAL kernel (R default) for comparison
-cat("\n=== Running SVR with RADIAL kernel (R default) ===\n")
-cat("Parameters: kernel=radial, cost=30, gamma=5, epsilon=0.1\n")
+  cat(sprintf("Linear kernel weights: min=%.6f, max=%.6f\n",
+              min(w_linear), max(w_linear)))
 
-svr_radial <- svm(x = lesmat_scaled,
-                  y = as.vector(behavior_scaled),
-                  scale = FALSE,
-                  type = 'eps-regression',
-                  kernel = 'radial',
-                  gamma = 5,
-                  cost = 30,
-                  epsilon = 0.1)
+  # Also run with RADIAL kernel (R default) for comparison
+  cat("\n=== Running SVR with RADIAL kernel (R default) ===\n")
+  cat("Parameters: kernel=radial, cost=30, gamma=5, epsilon=0.1\n")
 
-pred_radial <- predict(svr_radial, lesmat_scaled)
-corr_radial <- cor(pred_radial, behavior_scaled)
-cat(sprintf("Radial SVR correlation (scaled): %.6f\n", corr_radial))
+  svr_radial <- svm(x = lesmat_scaled,
+                    y = as.vector(behavior_scaled),
+                    scale = FALSE,
+                    type = 'eps-regression',
+                    kernel = 'radial',
+                    gamma = 5,
+                    cost = 30,
+                    epsilon = 0.1)
 
-# Get weights for radial kernel (note: not directly interpretable)
-w_radial <- t(svr_radial$coefs) %*% svr_radial$SV
-w_radial <- as.vector(w_radial)
+  pred_radial <- predict(svr_radial, lesmat_scaled)
+  corr_radial <- cor(pred_radial, behavior_scaled)
+  cat(sprintf("Radial SVR correlation (scaled): %.6f\n", corr_radial))
 
-# Scale weights as in lsm_svr.R (betaScale = 10/max(abs(w)))
-betaScale_radial <- 10 / max(abs(w_radial))
-statistic_radial <- w_radial * betaScale_radial
+  # Get weights for radial kernel (note: not directly interpretable)
+  w_radial <- t(svr_radial$coefs) %*% svr_radial$SV
+  w_radial <- as.vector(w_radial)
+
+  # Scale weights as in lsm_svr.R (betaScale = 10/max(abs(w)))
+  betaScale_radial <- 10 / max(abs(w_radial))
+  statistic_radial <- w_radial * betaScale_radial
+} else {
+  cat("\n=== Skipping direct e1071 diagnostics; RUN_TRUE_LSM_ONLY=1 ===\n")
+}
 
 # Run true LESYMAP lsm_svr() method-level references. Use SVR.nperm=1 so the
 # permutation p-value path is deterministic and cheap. Do not use 0: in R,
@@ -161,78 +166,80 @@ lsm_svr_radial <- lsm_svr(
 # Save reference data
 cat("\nSaving reference data...\n")
 
-# Save linear kernel results
-saveRDS(list(
-  predictions = as.vector(pred_linear),
-  correlation = as.numeric(corr_linear),
-  weights = w_linear,
-  n_support_vectors = svr_linear$tot.nSV,
-  kernel = "linear",
-  cost = 1,
-  epsilon = 0.1
-), file.path(output_dir, "svr_linear_results.rds"))
+if (!run_true_lsm_only) {
+  # Save linear kernel results
+  saveRDS(list(
+    predictions = as.vector(pred_linear),
+    correlation = as.numeric(corr_linear),
+    weights = w_linear,
+    n_support_vectors = svr_linear$tot.nSV,
+    kernel = "linear",
+    cost = 1,
+    epsilon = 0.1
+  ), file.path(output_dir, "svr_linear_results.rds"))
 
-# Save radial kernel results
-saveRDS(list(
-  predictions = as.vector(pred_radial),
-  correlation = as.numeric(corr_radial),
-  weights = w_radial,
-  statistic = statistic_radial,
-  n_support_vectors = svr_radial$tot.nSV,
-  kernel = "radial",
-  cost = 30,
-  gamma = 5,
-  epsilon = 0.1
-), file.path(output_dir, "svr_radial_results.rds"))
+  # Save radial kernel results
+  saveRDS(list(
+    predictions = as.vector(pred_radial),
+    correlation = as.numeric(corr_radial),
+    weights = w_radial,
+    statistic = statistic_radial,
+    n_support_vectors = svr_radial$tot.nSV,
+    kernel = "radial",
+    cost = 30,
+    gamma = 5,
+    epsilon = 0.1
+  ), file.path(output_dir, "svr_radial_results.rds"))
 
-# Save input data for Python to use
-saveRDS(list(
-  lesmat = lesmat,
-  lesmat_scaled = lesmat_scaled,
-  behavior = behavior,
-  behavior_scaled = as.vector(behavior_scaled),
-  behavior_center = behavior_center,
-  behavior_scale = behavior_scale,
-  lesmat_center = lesmat_center,
-  lesmat_scale = lesmat_scale,
-  n_subjects = n_subjects,
-  n_voxels = ncol(lesmat)
-), file.path(output_dir, "svr_input_data.rds"))
+  # Save input data for Python to use
+  saveRDS(list(
+    lesmat = lesmat,
+    lesmat_scaled = lesmat_scaled,
+    behavior = behavior,
+    behavior_scaled = as.vector(behavior_scaled),
+    behavior_center = behavior_center,
+    behavior_scale = behavior_scale,
+    lesmat_center = lesmat_center,
+    lesmat_scale = lesmat_scale,
+    n_subjects = n_subjects,
+    n_voxels = ncol(lesmat)
+  ), file.path(output_dir, "svr_input_data.rds"))
 
-# Also save as CSV for easier Python loading
-write.csv(lesmat, file.path(output_dir, "svr_lesmat.csv"), row.names = FALSE)
-write.csv(lesmat_scaled, file.path(output_dir, "svr_lesmat_scaled.csv"), row.names = FALSE)
-write.csv(data.frame(behavior = behavior),
-          file.path(output_dir, "svr_behavior.csv"), row.names = FALSE)
-write.csv(data.frame(behavior_scaled = as.vector(behavior_scaled)),
-          file.path(output_dir, "svr_behavior_scaled.csv"), row.names = FALSE)
+  # Also save as CSV for easier Python loading
+  write.csv(lesmat, gzfile(file.path(output_dir, "svr_lesmat.csv.gz")), row.names = FALSE)
+  write.csv(lesmat_scaled, gzfile(file.path(output_dir, "svr_lesmat_scaled.csv.gz")), row.names = FALSE)
+  write.csv(data.frame(behavior = behavior),
+            file.path(output_dir, "svr_behavior.csv"), row.names = FALSE)
+  write.csv(data.frame(behavior_scaled = as.vector(behavior_scaled)),
+            file.path(output_dir, "svr_behavior_scaled.csv"), row.names = FALSE)
 
-# Save linear kernel results as CSV
-write.csv(data.frame(
-  predictions = as.vector(pred_linear),
-  correlation = as.numeric(corr_linear)
-), file.path(output_dir, "svr_linear_predictions.csv"), row.names = FALSE)
-write.csv(data.frame(weights = w_linear),
-          file.path(output_dir, "svr_linear_weights.csv"), row.names = FALSE)
+  # Save linear kernel results as CSV
+  write.csv(data.frame(
+    predictions = as.vector(pred_linear),
+    correlation = as.numeric(corr_linear)
+  ), file.path(output_dir, "svr_linear_predictions.csv"), row.names = FALSE)
+  write.csv(data.frame(weights = w_linear),
+            file.path(output_dir, "svr_linear_weights.csv"), row.names = FALSE)
 
-# Save radial kernel results as CSV
-write.csv(data.frame(
-  predictions = as.vector(pred_radial),
-  correlation = as.numeric(corr_radial)
-), file.path(output_dir, "svr_radial_predictions.csv"), row.names = FALSE)
-write.csv(data.frame(weights = w_radial),
-          file.path(output_dir, "svr_radial_weights.csv"), row.names = FALSE)
+  # Save radial kernel results as CSV
+  write.csv(data.frame(
+    predictions = as.vector(pred_radial),
+    correlation = as.numeric(corr_radial)
+  ), file.path(output_dir, "svr_radial_predictions.csv"), row.names = FALSE)
+  write.csv(data.frame(weights = w_radial),
+            file.path(output_dir, "svr_radial_weights.csv"), row.names = FALSE)
+}
 
 # Save true lsm_svr method-level outputs.
 write.csv(data.frame(
   statistic = as.vector(lsm_svr_linear$statistic),
   pvalue = as.vector(lsm_svr_linear$pvalue)
-), file.path(output_dir, "svr_lsm_linear_results.csv"), row.names = FALSE)
+), gzfile(file.path(output_dir, "svr_lsm_linear_results.csv.gz")), row.names = FALSE)
 
 write.csv(data.frame(
   statistic = as.vector(lsm_svr_radial$statistic),
   pvalue = as.vector(lsm_svr_radial$pvalue)
-), file.path(output_dir, "svr_lsm_radial_results.csv"), row.names = FALSE)
+), gzfile(file.path(output_dir, "svr_lsm_radial_results.csv.gz")), row.names = FALSE)
 
 # Save metadata
 metadata <- list(
@@ -246,26 +253,45 @@ metadata <- list(
   generation_date = Sys.time()
 )
 saveRDS(metadata, file.path(output_dir, "svr_metadata.rds"))
+write.csv(
+  data.frame(
+    r_version = metadata$r_version,
+    lesymap_version = metadata$lesymap_version,
+    e1071_version = metadata$e1071_version,
+    seed = metadata$seed,
+    n_subjects = metadata$n_subjects,
+    n_voxels = metadata$n_voxels,
+    mask_threshold = metadata$mask_threshold,
+    generation_mode = ifelse(run_true_lsm_only, "true_lsm_only", "full"),
+    generation_date = as.character(metadata$generation_date)
+  ),
+  file.path(output_dir, "svr_manifest.csv"),
+  row.names = FALSE
+)
 
 cat("\n=== Summary ===\n")
 cat(sprintf("Input matrix: %d subjects x %d voxels\n", n_subjects, ncol(lesmat)))
-cat(sprintf("Linear kernel correlation: %.6f\n", corr_linear))
-cat(sprintf("Radial kernel correlation: %.6f\n", corr_radial))
-cat(sprintf("Linear kernel support vectors: %d\n", svr_linear$tot.nSV))
-cat(sprintf("Radial kernel support vectors: %d\n", svr_radial$tot.nSV))
+if (!run_true_lsm_only) {
+  cat(sprintf("Linear kernel correlation: %.6f\n", corr_linear))
+  cat(sprintf("Radial kernel correlation: %.6f\n", corr_radial))
+  cat(sprintf("Linear kernel support vectors: %d\n", svr_linear$tot.nSV))
+  cat(sprintf("Radial kernel support vectors: %d\n", svr_radial$tot.nSV))
+}
 cat(sprintf("\nReference data saved to: %s\n", output_dir))
 cat("Files created:\n")
-cat("  - svr_linear_results.rds\n")
-cat("  - svr_radial_results.rds\n")
-cat("  - svr_input_data.rds\n")
-cat("  - svr_lesmat.csv\n")
-cat("  - svr_lesmat_scaled.csv\n")
-cat("  - svr_behavior.csv\n")
-cat("  - svr_behavior_scaled.csv\n")
-cat("  - svr_linear_predictions.csv\n")
-cat("  - svr_linear_weights.csv\n")
-cat("  - svr_radial_predictions.csv\n")
-cat("  - svr_radial_weights.csv\n")
-cat("  - svr_lsm_linear_results.csv\n")
-cat("  - svr_lsm_radial_results.csv\n")
+if (!run_true_lsm_only) {
+  cat("  - svr_linear_results.rds\n")
+  cat("  - svr_radial_results.rds\n")
+  cat("  - svr_input_data.rds\n")
+  cat("  - svr_lesmat.csv.gz\n")
+  cat("  - svr_lesmat_scaled.csv.gz\n")
+  cat("  - svr_behavior.csv\n")
+  cat("  - svr_behavior_scaled.csv\n")
+  cat("  - svr_linear_predictions.csv\n")
+  cat("  - svr_linear_weights.csv\n")
+  cat("  - svr_radial_predictions.csv\n")
+  cat("  - svr_radial_weights.csv\n")
+}
+cat("  - svr_lsm_linear_results.csv.gz\n")
+cat("  - svr_lsm_radial_results.csv.gz\n")
 cat("  - svr_metadata.rds\n")

@@ -20,6 +20,8 @@ pytest -q
 114 passed, 13 deselected, 260 warnings in 6.96s
 pytest -q -m slow tests/test_svr_r_comparison.py::TestPythonLSMSVREndToEnd
 2 passed, 5 warnings in 98.17s (0:01:38)
+pytest -q -m slow tests/test_svr_r_comparison.py
+12 passed, 2 deselected, 29 warnings in 102.28s (0:01:42)
 pytest -q -m slow tests/test_sccan_r_comparison.py::TestPythonLSMSCCANEndToEnd
 1 passed, 2 warnings in 75.48s (0:01:15)
 ```
@@ -137,12 +139,21 @@ shape as R LESYMAP.
   Python `lsm_svr()` against true R `lsm_svr()` outputs on a small generated
   fixture for both linear and default RBF kernels. This runs in the default test
   suite and checks statistic vectors plus valid R permutation p-values.
+- `tests/test_svr_r_comparison.py::TestTrueRLSMSVRReference` now compares
+  Python `lsm_svr()` against large true R `lsm_svr()` statistic vectors for
+  both linear and default RBF kernels. The fixture set includes compressed
+  `svr_lesmat.csv.gz`, `svr_lesmat_scaled.csv.gz`,
+  `svr_lsm_linear_results.csv.gz`, `svr_lsm_radial_results.csv.gz`, and a
+  manifest with subject/voxel dimensions and R package versions. This is marked
+  `slow` and must be run explicitly with `-m slow`.
 
 ### What Is Not Yet Strictly Verified
 
-- `tests/generate_r_svr_reference.R` now includes true R `lsm_svr()` method-level outputs (`svr_lsm_linear_results.csv`, `svr_lsm_radial_results.csv`), but those new fixture files have not yet been regenerated into the repository.
-- `tests/test_svr_r_comparison.py::TestTrueRLSMSVRReference` will compare Python `lsm_svr()` against large true R `lsm_svr()` statistic/pvalue vectors once those new CSV files exist; it is marked `slow` and currently skips when they are absent.
-- Large-fixture permutation p-values and R output object metadata still need true end-to-end R fixture comparison.
+- Large-fixture R permutation p-values are not yet reproduced by Python
+  `lsm_svr()`. The current true-R tests verify statistic-map parity and only
+  check that the R p-values are valid probabilities.
+- R output object metadata beyond statistic vectors and valid p-value ranges
+  still needs fixture comparison if exact R object parity becomes required.
 
 ## Binary Behavior Evaluation
 
@@ -167,12 +178,13 @@ Use SCCAN as the primary R-like predictive method, especially for continuity wit
 - `r_compatible=True` when comparing with or migrating from R LESYMAP.
 - default Python SVR when you want a conventional scikit-learn linear SVR baseline.
 
-Before claiming full R replacement equivalence, add CV-sparseness SCCAN fixtures
-and run a real masked NIfTI predictive experiment from `test_data/`.
+Before claiming full R replacement equivalence, add CV-sparseness SCCAN fixtures,
+decide whether Python should reproduce R SVR permutation p-values, and run a
+real masked NIfTI predictive experiment from `test_data/`.
 
 ## Remaining Validation Checklist
 
-- Regenerate large true R `lsm_svr()` fixtures with the updated generator if large-fixture method-level SVR parity is needed beyond the checked-in tiny fixture.
-- Add fixture-manifest tests so missing R reference files fail clearly or are reported as unavailable.
+- Decide whether to implement Python-side SVR permutation p-value images that
+  match R `lsm_svr()` or keep p-values out of the Python prediction API scope.
 - Generate optional SCCAN CV-sparseness fixtures with `RUN_SCCAN_CV=1`.
 - Run a real masked NIfTI predictive experiment from `test_data/` once reference outputs are available.
