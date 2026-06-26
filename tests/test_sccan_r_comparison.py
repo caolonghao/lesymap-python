@@ -5,8 +5,7 @@ This test validates the Python SCCAN implementation by comparing results
 with the R LESYMAP package's lsm_sccan function.
 
 Key implementation details:
-- R uses scale() with ddof=0 for standard deviation calculation
-- Python uses np.std(ddof=0) to match R's scale() function
+- R scale(center=TRUE, scale=TRUE) uses sample standard deviation (n - 1)
 - SCCAN is stochastic, so correlations should match within tolerance (0.05)
 - Weights are normalized to [-1, 1] range in both implementations
 
@@ -19,7 +18,7 @@ R lsm_sccan workflow:
 6. Linear calibration: lm(behavior.orig ~ predbehav.raw)
 
 Python lsm_sccan workflow:
-1. Scale and center using numpy (ddof=0 to match R)
+1. Scale and center using saved R-style scaling parameters
 2. Call sparse_decom2() from ANTsPy
 3. Same normalization and flipping logic
 4. Same thresholding and linear calibration
@@ -28,8 +27,11 @@ Python lsm_sccan workflow:
 import pytest
 import numpy as np
 import pandas as pd
+import nibabel as nib
 from pathlib import Path
 from scipy.stats import pearsonr
+
+from lesymap.methods.multivariate import lsm_sccan
 
 # Path to R reference data
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "r_reference_results"
@@ -39,12 +41,9 @@ def r_scale(x, center=True, scale=True):
     """
     Replicate R's scale() function.
 
-    R's scale() uses:
+    R's scale() with center=TRUE uses:
     - center: mean(x)
-    - scale: sd(x) with ddof=0 (population sd, not sample sd)
-
-    Note: R's sd() uses ddof=1 (sample sd), but scale() uses ddof=0!
-    This is a known quirk in R's scale() function.
+    - scale: sqrt(sum((x - mean(x))^2) / (n - 1))
     """
     x = np.asarray(x, dtype=float)
 
@@ -101,6 +100,25 @@ def load_r_reference_data():
 
     # Load normalized statistics
     data['statistic'] = pd.read_csv(FIXTURES_DIR / "test1_statistic.csv")['statistic'].values
+
+    optional_files = {
+        'lesmat': "sccan_lesmat.csv",
+        'behavior': "sccan_behavior.csv",
+        'mask_vector': "sccan_mask_vector.csv",
+        'predictions': "test4_predictions.csv",
+    }
+    for key, filename in optional_files.items():
+        path = FIXTURES_DIR / filename
+        if path.exists():
+            frame = pd.read_csv(path)
+            if key == 'behavior':
+                data[key] = frame['behavior'].values
+            elif key == 'mask_vector':
+                data[key] = frame['mask'].values.astype(bool)
+            elif key == 'lesmat':
+                data[key] = frame.values
+            else:
+                data[key] = frame
 
     return data
 
@@ -323,6 +341,60 @@ class TestPredictionWorkflow:
         assert np.isfinite(pred_calibrated), "Calibrated prediction should be finite"
 
         print("PASS: Prediction formula produces valid results")
+
+
+@pytest.mark.slow
+class TestPythonLSMSCCANEndToEnd:
+    """Run Python lsm_sccan on the same matrix used by R reference generation."""
+
+    def test_lsm_sccan_matches_r_reference_when_inputs_available(self, r_data):
+        required = ['lesmat', 'behavior', 'mask_vector', 'predictions']
+        missing = [key for key in required if key not in r_data]
+        if missing:
+            pytest.skip(
+                "Missing SCCAN rerun fixtures: "
+                + ", ".join(missing)
+                + ". Regenerate with tests/generate_r_sccan_reference.R."
+            )
+
+        lesmat = r_data['lesmat']
+        behavior = r_data['behavior']
+        mask_vector = r_data['mask_vector']
+        mask_img = nib.Nifti1Image(mask_vector.astype(float).reshape(-1, 1, 1), np.eye(4))
+
+        result = lsm_sccan(
+            lesmat,
+            behavior,
+            mask_img,
+            optimize_sparseness=False,
+            sparseness=float(r_data['sparseness']),
+            cthresh=150,
+            its=20,
+            smooth=0.4,
+            robust=1,
+            robust_rank_fallback='auto',
+            mycoption=1,
+            max_based=False,
+            directional_sccan=True,
+            min_cluster_size=150,
+            show_info=False,
+        )
+
+        py_statistic = result.stat_img.get_fdata().reshape(-1)[mask_vector]
+        r_statistic = r_data['statistic']
+        py_predictions = result.predict([
+            nib.Nifti1Image(row.reshape(-1, 1, 1), np.eye(4))
+            for row in lesmat
+        ])
+        r_predictions = r_data['predictions']['pred_calibrated'].values
+
+        stat_corr, _ = pearsonr(py_statistic, r_statistic)
+        pred_corr, _ = pearsonr(py_predictions, r_predictions)
+
+        assert result.model_params['robust'] == 1
+        assert stat_corr > 0.75
+        assert pred_corr > 0.75
+        assert abs(np.count_nonzero(py_statistic) - np.count_nonzero(r_statistic)) / len(r_statistic) < 0.1
 
 
 class TestDataIntegrity:

@@ -34,11 +34,19 @@ pytest -q -m slow tests/test_svr_r_comparison.py::TestPythonLSMSVREndToEnd
   3. reverse behavior scaling,
   4. apply saved linear calibration.
 - Robust fallback behavior is covered at the Python control-flow level: if ANTsPy raises `NotImplementedError` for `robust > 0`, Python rank-transforms the data and reruns with backend `robust=0`.
+- `tests/generate_r_sccan_reference.R` now saves the missing rerun inputs
+  (`sccan_lesmat.csv`, `sccan_behavior.csv`, `sccan_mask_vector.csv`) in addition
+  to R maps, scaling metadata, and prediction outputs.
+- `tests/test_sccan_r_comparison.py::TestPythonLSMSCCANEndToEnd` is wired to
+  run Python `lsm_sccan()` on those exact R inputs and compare statistic/prediction
+  correlations when the regenerated fixtures are present.
 
 ### What Is Not Yet Strictly Verified
 
-- Current SCCAN tests do not yet prove strict numerical equivalence against R `lsm_sccan()` output on the same dataset.
-- Existing R SCCAN fixtures are mostly self-consistency checks around stored R outputs; they do not call Python `lsm_sccan()` and compare full maps/predictions against R-generated expected values.
+- Current checked-in SCCAN fixtures still lack the newly added rerun input files,
+  so the Python-vs-R SCCAN end-to-end test currently skips until the R generator
+  is rerun under ANTsR/LESYMAP, for example with the `dorianps/lesymap` Docker image.
+- Existing checked-in R SCCAN fixtures are mostly self-consistency checks around stored R outputs; they do not yet enable Python `lsm_sccan()` to compare full maps/predictions against R-generated expected values.
 - CV-selected sparseness, `eig1`, `eig2`, calibrated predictions, and final statistic maps still need true R-vs-Python fixture comparisons.
 
 ### Robust Rank Behavior
@@ -152,8 +160,9 @@ Before claiming full R replacement equivalence, add end-to-end fixtures generate
 
 ## Remaining Validation Checklist
 
-- Generate true R `lsm_sccan()` fixtures with maps, `eig1`, `eig2`, CV sparseness, calibration model, and predictions.
-- Generate true R `lsm_svr()` fixtures by calling the R LESYMAP function, not only direct `e1071::svm()`.
+- Regenerate true R `lsm_sccan()` fixtures with the updated generator so the
+  Python-vs-R SCCAN slow test can run instead of skip.
+- Regenerate large true R `lsm_svr()` fixtures with the updated generator if large-fixture method-level SVR parity is needed beyond the checked-in tiny fixture.
 - Add fixture-manifest tests so missing R reference files fail clearly or are reported as unavailable.
 - Compare R-compatible SVR support-vector projection maps against true R output for linear and RBF kernels.
 - Run a real masked NIfTI predictive experiment from `test_data/` once reference outputs are available.

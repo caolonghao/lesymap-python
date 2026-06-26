@@ -255,6 +255,21 @@ write.csv(prediction_metrics, file.path(output_dir, "test4_metrics.csv"), row.na
 cat("\n=== Saving mask and lesion matrix ===\n")
 antsImageWrite(mask, file.path(output_dir, "mask.nii.gz"))
 
+# Full analysis inputs for Python-vs-R reruns. These are intentionally saved
+# after the R outputs so tests can call Python lsm_sccan() on exactly the same
+# matrix/behavior/mask that produced the reference maps.
+write.csv(lesmat, file.path(output_dir, "sccan_lesmat.csv"), row.names = FALSE)
+write.csv(
+  data.frame(behavior = behavior),
+  file.path(output_dir, "sccan_behavior.csv"),
+  row.names = FALSE
+)
+write.csv(
+  data.frame(mask = as.numeric(as.array(mask) > 0)),
+  file.path(output_dir, "sccan_mask_vector.csv"),
+  row.names = FALSE
+)
+
 # Save lesion matrix dimensions
 write.csv(
   data.frame(
