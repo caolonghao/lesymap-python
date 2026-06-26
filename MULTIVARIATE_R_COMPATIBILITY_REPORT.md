@@ -11,13 +11,20 @@ Current status:
 - SVR/SVM now has an explicit `r_compatible=True` mode. This mode matches the main R LESYMAP preprocessing/default-parameter shape more closely: R-style centering/scaling, R defaults (`kernel='rbf'`, `C=30`, `gamma=5`, `epsilon=0.1`), prediction unscaling, and R-style `10 / max(abs(w))` statistic scaling for linear SVR.
 - Standard Python SVR remains intentionally Pythonic by default: `kernel='linear'`, `C=1.0`, `epsilon=0.1`, no internal R scaling. This avoids silently changing existing users' results.
 - Prediction API coverage has improved. SCCAN and SVR now have checkpoint roundtrip tests, including patch-compressed training.
+- Real masked NIfTI prediction coverage now exists for both SVR and SCCAN:
+  train from `test_data/normalized_masks`, save checkpoint, reload, and predict
+  held-out subjects.
 - Binary behavior such as mutism `0/1` should be treated as a continuous-risk prediction problem first. A fixed `0.5` cutoff is not generally valid unless the output has been calibrated to probability scale.
 
-Fresh verification on `main` after merge:
+Fresh verification on `compat/testdata-e2e` before merge:
 
 ```text
 pytest -q
-114 passed, 13 deselected, 260 warnings in 6.96s
+113 passed, 2 skipped, 15 deselected, 266 warnings in 3.45s
+pytest -q tests/test_prediction_roundtrip.py tests/test_multivariate_perf_controls.py
+18 passed, 40 warnings in 1.85s
+pytest -q -m slow tests/test_testdata_prediction_e2e.py -rs
+2 passed, 4 warnings in 7.16s
 pytest -q -m slow tests/test_svr_r_comparison.py::TestPythonLSMSVREndToEnd
 2 passed, 5 warnings in 98.17s (0:01:38)
 pytest -q -m slow tests/test_svr_r_comparison.py
@@ -155,6 +162,25 @@ shape as R LESYMAP.
 - R output object metadata beyond statistic vectors and valid p-value ranges
   still needs fixture comparison if exact R object parity becomes required.
 
+## Real Test Data E2E
+
+`tests/test_testdata_prediction_e2e.py` uses the real masked NIfTI files under
+`test_data/normalized_masks` when they are available. To keep the test bounded,
+it builds a deterministic small ROI from variable lesion voxels and derives a
+synthetic continuous behavior score from lesion load within that ROI.
+
+What this verifies:
+
+- public `lesymap.lesymap()` accepts real NIfTI mask paths and an explicit ROI mask,
+- SVR `r_compatible=True` trains on real masked NIfTI data,
+- SCCAN trains on real masked NIfTI data with fixed sparseness,
+- both result types can `save_checkpoint()`, `load_checkpoint()`, and `predict()`
+  held-out real NIfTI subjects,
+- `LesymapResult.predict()` accepts `pathlib.Path` inputs as well as strings.
+
+This is an end-to-end API and I/O smoke test, not an R-vs-Python statistical
+parity test for the local `test_data/` cohort.
+
 ## Binary Behavior Evaluation
 
 For behavior labels such as mutism `0/1`, SCCAN/SVR outputs should be interpreted as continuous scores unless an explicit calibration step has been fitted.
@@ -178,13 +204,11 @@ Use SCCAN as the primary R-like predictive method, especially for continuity wit
 - `r_compatible=True` when comparing with or migrating from R LESYMAP.
 - default Python SVR when you want a conventional scikit-learn linear SVR baseline.
 
-Before claiming full R replacement equivalence, add CV-sparseness SCCAN fixtures,
-decide whether Python should reproduce R SVR permutation p-values, and run a
-real masked NIfTI predictive experiment from `test_data/`.
+Before claiming full R replacement equivalence, add CV-sparseness SCCAN fixtures
+and decide whether Python should reproduce R SVR permutation p-values.
 
 ## Remaining Validation Checklist
 
 - Decide whether to implement Python-side SVR permutation p-value images that
   match R `lsm_svr()` or keep p-values out of the Python prediction API scope.
 - Generate optional SCCAN CV-sparseness fixtures with `RUN_SCCAN_CV=1`.
-- Run a real masked NIfTI predictive experiment from `test_data/` once reference outputs are available.
