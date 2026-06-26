@@ -29,7 +29,7 @@ pytest -q tests/test_svr_r_compatible.py tests/test_svr_r_comparison.py::TestTin
 pytest -q -m slow tests/test_testdata_prediction_e2e.py -rs
 2 passed, 4 warnings in 8.24s
 pytest -q -m slow tests/test_sccan_r_comparison.py::TestPythonLSMSCCANEndToEnd tests/test_testdata_prediction_e2e.py -rs
-3 passed, 6 warnings in 87.23s (0:01:27)
+3 passed, 6 warnings in 86.29s (0:01:26)
 pytest -q tests/test_sccan_r_comparison.py
 12 passed, 2 deselected, 28 warnings in 1.30s
 pytest -q -m slow tests/test_sccan_r_comparison.py::TestTinySCCANCVReference::test_python_r_bounded_sccan_cv_runs_on_tiny_r_fixture -rs
@@ -37,7 +37,7 @@ pytest -q -m slow tests/test_sccan_r_comparison.py::TestTinySCCANCVReference::te
 pytest -q -m slow tests/test_svr_r_comparison.py::TestPythonLSMSVREndToEnd
 2 passed, 5 warnings in 98.17s (0:01:38)
 pytest -q -m slow tests/test_svr_r_comparison.py
-12 passed, 2 deselected, 29 warnings in 102.67s (0:01:42)
+12 passed, 2 deselected, 29 warnings in 103.05s (0:01:43)
 pytest -q -m slow tests/test_sccan_r_comparison.py::TestPythonLSMSCCANEndToEnd
 1 passed, 2 warnings in 75.48s (0:01:15)
 ```
