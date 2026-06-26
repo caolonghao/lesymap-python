@@ -101,32 +101,6 @@ def load_r_reference_data():
     # Load normalized statistics
     data['statistic'] = pd.read_csv(FIXTURES_DIR / "test1_statistic.csv")['statistic'].values
 
-    optional_files = {
-        'lesmat': ("sccan_lesmat.csv.gz", "sccan_lesmat.csv"),
-        'behavior': "sccan_behavior.csv",
-        'mask_img': "mask.nii.gz",
-        'predictions': "test4_predictions.csv",
-    }
-    for key, filename in optional_files.items():
-        if isinstance(filename, tuple):
-            path = next((FIXTURES_DIR / item for item in filename if (FIXTURES_DIR / item).exists()), None)
-            if path is None:
-                continue
-        else:
-            path = FIXTURES_DIR / filename
-        if path.exists():
-            if key == 'mask_img':
-                data[key] = nib.load(path)
-                continue
-
-            frame = pd.read_csv(path)
-            if key == 'behavior':
-                data[key] = frame['behavior'].values
-            elif key == 'lesmat':
-                data[key] = frame.values
-            else:
-                data[key] = frame
-
     return data
 
 
@@ -150,6 +124,42 @@ def r_data():
         return load_r_reference_data()
     except Exception as e:
         pytest.skip(f"Failed to load R reference data: {e}")
+
+
+@pytest.fixture(scope="module")
+def sccan_rerun_data():
+    """Load full SCCAN rerun inputs only for the slow end-to-end comparison."""
+    lesmat_path = next(
+        (
+            FIXTURES_DIR / item
+            for item in ("sccan_lesmat.csv.gz", "sccan_lesmat.csv")
+            if (FIXTURES_DIR / item).exists()
+        ),
+        None,
+    )
+    required_paths = {
+        "lesmat": lesmat_path,
+        "behavior": FIXTURES_DIR / "sccan_behavior.csv",
+        "mask_img": FIXTURES_DIR / "mask.nii.gz",
+        "predictions": FIXTURES_DIR / "test4_predictions.csv",
+    }
+    missing = [key for key, path in required_paths.items() if path is None or not path.exists()]
+    if missing:
+        pytest.skip(
+            "Missing SCCAN rerun fixtures: "
+            + ", ".join(missing)
+            + ". Regenerate with tests/generate_r_sccan_reference.R."
+        )
+
+    try:
+        return {
+            "lesmat": pd.read_csv(required_paths["lesmat"]).values,
+            "behavior": pd.read_csv(required_paths["behavior"])["behavior"].values,
+            "mask_img": nib.load(required_paths["mask_img"]),
+            "predictions": pd.read_csv(required_paths["predictions"]),
+        }
+    except Exception as e:
+        pytest.skip(f"Failed to load SCCAN rerun fixtures: {e}")
 
 
 class TestScalingBehavior:
@@ -354,19 +364,10 @@ class TestPredictionWorkflow:
 class TestPythonLSMSCCANEndToEnd:
     """Run Python lsm_sccan on the same matrix used by R reference generation."""
 
-    def test_lsm_sccan_matches_r_reference_when_inputs_available(self, r_data):
-        required = ['lesmat', 'behavior', 'mask_img', 'predictions']
-        missing = [key for key in required if key not in r_data]
-        if missing:
-            pytest.skip(
-                "Missing SCCAN rerun fixtures: "
-                + ", ".join(missing)
-                + ". Regenerate with tests/generate_r_sccan_reference.R."
-            )
-
-        lesmat = r_data['lesmat']
-        behavior = r_data['behavior']
-        mask_img = r_data['mask_img']
+    def test_lsm_sccan_matches_r_reference_when_inputs_available(self, r_data, sccan_rerun_data):
+        lesmat = sccan_rerun_data['lesmat']
+        behavior = sccan_rerun_data['behavior']
+        mask_img = sccan_rerun_data['mask_img']
         mask_vector = mask_img.get_fdata().reshape(-1) > 0
 
         result = lsm_sccan(
@@ -399,7 +400,7 @@ class TestPythonLSMSCCANEndToEnd:
             nib.Nifti1Image(row.reshape(mask_shape), mask_img.affine)
             for row in full_space_rows
         ])
-        r_predictions = r_data['predictions']['pred_calibrated'].values
+        r_predictions = sccan_rerun_data['predictions']['pred_calibrated'].values
 
         stat_corr, _ = pearsonr(py_statistic, r_statistic)
         aligned_stat_corr = abs(stat_corr)
