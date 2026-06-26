@@ -42,7 +42,8 @@ VALID_METHOD_PARAMS = {
     },
     'svr': {
         'C', 'kernel', 'epsilon', 'gamma', 'degree', 'coef0', 'n_perm',
-        'max_features', 'r_compatible'
+        'max_features', 'r_compatible', 'compute_pvalues',
+        'svr_pvalue_method', 'random_state'
     },
     'BMfast': set(),
     'ttest': set(),

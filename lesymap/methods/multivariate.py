@@ -605,6 +605,9 @@ def lsm_svr(lesmat: np.ndarray,
             n_perm: int = 50,
             max_features: Optional[int] = None,
             r_compatible: bool = False,
+            compute_pvalues: bool = False,
+            svr_pvalue_method: str = 'none',
+            random_state: Optional[int] = None,
             show_info: bool = True,
             **kwargs) -> LesymapResult:
     """
@@ -643,6 +646,16 @@ def lsm_svr(lesmat: np.ndarray,
     r_compatible : bool
         If True, scale lesmat and behavior before fitting and unscale
         predictions, matching the main R LESYMAP SVR preprocessing semantics.
+    compute_pvalues : bool
+        If True, compute R-style directional permutation p-values from SVR
+        statistics. This is off by default because it refits the model nperm
+        times and can be very slow.
+    svr_pvalue_method : str
+        P-value method. Use 'none' for no p-value image or 'r_permutation'
+        for R LESYMAP's directional permutation p-values. Setting
+        compute_pvalues=True is equivalent to 'r_permutation'.
+    random_state : int, optional
+        Seed for permutation p-values.
     show_info : bool
         Print progress information
     **kwargs
@@ -654,6 +667,21 @@ def lsm_svr(lesmat: np.ndarray,
         Result object with weights and statistical maps
     """
     n_subjects, n_features = lesmat.shape
+    valid_pvalue_methods = {'none', 'r_permutation'}
+    if svr_pvalue_method not in valid_pvalue_methods:
+        raise ValueError(
+            "svr_pvalue_method must be one of "
+            f"{sorted(valid_pvalue_methods)}, got {svr_pvalue_method!r}"
+        )
+    if compute_pvalues:
+        svr_pvalue_method = 'r_permutation'
+    compute_pvalues = svr_pvalue_method != 'none'
+    if compute_pvalues and not r_compatible:
+        raise ValueError(
+            "svr_pvalue_method='r_permutation' requires r_compatible=True "
+            "so p-values use the same R-style statistic as the fitted model"
+        )
+
     if r_compatible:
         if kernel is None:
             kernel = 'rbf'
@@ -704,10 +732,7 @@ def lsm_svr(lesmat: np.ndarray,
     # Extract feature statistics.
     if r_compatible:
         weights = (svr.dual_coef_ @ svr.support_vectors_).ravel()
-        statistic = weights.copy()
-        max_abs_weight = np.max(np.abs(weights))
-        if max_abs_weight > 0:
-            statistic = weights * (10.0 / max_abs_weight)
+        statistic = _svr_projection_statistic(svr)
     elif kernel == 'linear':
         weights = svr.coef_.flatten()
         statistic = weights.copy()
@@ -726,22 +751,47 @@ def lsm_svr(lesmat: np.ndarray,
         )
         statistic = weights
 
+    pvals = None
+    if compute_pvalues:
+        if nperm <= 0:
+            raise ValueError("compute_pvalues=True requires nperm > 0")
+        if show_info:
+            print(f"  Computing SVR permutation p-values (nperm={nperm})...")
+        pvals = _compute_svr_r_directional_pvalues(
+            lesmat_fit=lesmat_fit,
+            behavior_fit=behavior_fit,
+            statistic=statistic,
+            nperm=nperm,
+            kernel=kernel,
+            C=C,
+            epsilon=epsilon,
+            svr_kwargs=kwargs,
+            random_state=random_state,
+        )
+
     # Map back to voxel space if using patches
     if patchinfo is not None and 'patchindx' in patchinfo:
         statistic_full = analysis_patches_to_voxels(statistic, patchinfo)
         raw_weights_full = analysis_patches_to_voxels(weights, patchinfo)
+        pvals_full = (
+            analysis_patches_to_voxels(pvals, patchinfo, fill_value=1)
+            if pvals is not None else None
+        )
     else:
         statistic_full = statistic
         raw_weights_full = weights
+        pvals_full = pvals
 
     # Create statistical maps
     stat_img = matrix_to_image(statistic_full, mask_img)
     raw_weights_img = matrix_to_image(raw_weights_full, mask_img)
+    pval_img = matrix_to_image(pvals_full, mask_img) if pvals_full is not None else None
 
     result = LesymapResult(
         stat_img=stat_img,
         mask_img=mask_img,
         method='svr',
+        pval_img=pval_img,
         raw_weights_img=raw_weights_img,
         svr_model=svr,
         svr_behavior_scale=behavior_scale,
@@ -761,12 +811,56 @@ def lsm_svr(lesmat: np.ndarray,
             'correlation': correlation,
             'p_value': p_value,
             'n_perm': n_perm,
+            'nperm': nperm,
             'max_features': max_features,
+            'compute_pvalues': compute_pvalues,
+            'svr_pvalue_method': svr_pvalue_method,
+            'pvalue_method': svr_pvalue_method,
+            'random_state': random_state,
         },
         patchinfo=patchinfo,
     )
 
     return result
+
+
+def _svr_projection_statistic(model: SVR) -> np.ndarray:
+    """R LESYMAP SVR statistic: support-vector projection scaled to max 10."""
+    weights = (model.dual_coef_ @ model.support_vectors_).ravel()
+    statistic = weights.copy()
+    max_abs_weight = np.max(np.abs(weights))
+    if max_abs_weight > 0:
+        statistic = weights * (10.0 / max_abs_weight)
+    return statistic
+
+
+def _compute_svr_r_directional_pvalues(
+    lesmat_fit: np.ndarray,
+    behavior_fit: np.ndarray,
+    statistic: np.ndarray,
+    nperm: int,
+    kernel: str,
+    C: float,
+    epsilon: float,
+    svr_kwargs: Dict,
+    random_state: Optional[int] = None,
+) -> np.ndarray:
+    """Replicate R lsm_svr directional permutation p-value semantics."""
+    statistic = np.asarray(statistic, dtype=float)
+    exceed = np.ones(statistic.shape, dtype=float)
+    posindx = statistic >= 0
+    negindx = statistic < 0
+    rng = np.random.default_rng(random_state)
+
+    for _ in range(nperm):
+        permuted_behavior = behavior_fit[rng.permutation(len(behavior_fit))]
+        permuted_svr = SVR(kernel=kernel, C=C, epsilon=epsilon, **svr_kwargs)
+        permuted_svr.fit(lesmat_fit, permuted_behavior)
+        thisstat = _svr_projection_statistic(permuted_svr)
+        exceed[posindx] += thisstat[posindx] >= statistic[posindx]
+        exceed[negindx] += thisstat[negindx] <= statistic[negindx]
+
+    return exceed / (nperm + 1)
 
 
 def _r_scale_vector(vector: np.ndarray) -> Tuple[np.ndarray, float, float]:

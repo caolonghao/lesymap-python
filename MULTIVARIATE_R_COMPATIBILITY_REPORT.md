@@ -9,6 +9,7 @@ Current status:
 
 - SCCAN is the closest path for R-like predictive behavior. Python now has patch-aware checkpoint/prediction tests, a Python-side rank fallback for ANTsPy versions where `robust > 0` is not implemented, and a true R rerun fixture showing highly correlated calibrated predictions. Exact voxel-weight equality is not claimed.
 - SVR/SVM now has an explicit `r_compatible=True` mode. This mode matches the main R LESYMAP preprocessing/default-parameter shape more closely: R-style centering/scaling, R defaults (`kernel='rbf'`, `C=30`, `gamma=5`, `epsilon=0.1`), prediction unscaling, and R-style `10 / max(abs(w))` statistic scaling for linear SVR.
+- SVR can now optionally compute R-style directional permutation p-value maps with `svr_pvalue_method='r_permutation'` or `compute_pvalues=True`. This is off by default to avoid a large runtime regression.
 - Standard Python SVR remains intentionally Pythonic by default: `kernel='linear'`, `C=1.0`, `epsilon=0.1`, no internal R scaling. This avoids silently changing existing users' results.
 - Prediction API coverage has improved. SCCAN and SVR now have checkpoint roundtrip tests, including patch-compressed training.
 - Real masked NIfTI prediction coverage now exists for both SVR and SCCAN:
@@ -23,6 +24,8 @@ pytest -q
 117 passed, 16 deselected, 272 warnings in 6.66s
 pytest -q tests/test_prediction_roundtrip.py tests/test_multivariate_perf_controls.py
 18 passed, 40 warnings in 1.90s
+pytest -q tests/test_svr_r_compatible.py tests/test_svr_r_comparison.py::TestTinyTrueRLSMSVRReference tests/test_multivariate_perf_controls.py tests/test_prediction_roundtrip.py
+29 passed, 62 warnings in 2.12s
 pytest -q -m slow tests/test_testdata_prediction_e2e.py -rs
 2 passed, 4 warnings in 8.24s
 pytest -q tests/test_sccan_r_comparison.py
@@ -141,12 +144,35 @@ statistic = weights * (10 / max(abs(weights)))
 This covers the default RBF kernel and explicit linear kernel in the same
 shape as R LESYMAP.
 
+R-compatible SVR p-value maps are available explicitly:
+
+```python
+result = lsm_svr(
+    lesmat,
+    behavior,
+    mask_img,
+    r_compatible=True,
+    svr_pvalue_method='r_permutation',
+    nperm=1000,
+    random_state=123,
+)
+```
+
+This refits the SVR once per permutation and follows R LESYMAP's directional
+tail rule: positive statistics count permuted statistics `>=` the observed
+statistic, negative statistics count `<=`, and p-values are initialized with
+one exceedance then divided by `nperm + 1`. The option requires
+`r_compatible=True` so the p-value statistic matches the fitted R-style
+support-vector projection.
+
 ### What Is Verified
 
 - `tests/test_svr_r_compatible.py` verifies:
   - R-compatible defaults are `rbf`, `C=30`, `gamma=5`, `epsilon=0.1`.
   - standard Python defaults remain `linear`, `C=1`, `epsilon=0.1` and are independent of `show_info`.
   - R-compatible statistic maps use support-vector projection followed by `10 / max(abs(weights))`.
+  - R-compatible permutation p-value maps are opt-in, use R's directional
+    exceedance formula, and remain disabled by default.
   - filtered analysis patches expand back to the original patch index before voxel-map reconstruction.
 - `tests/test_prediction_roundtrip.py` verifies:
   - SVR prediction survives checkpoint save/load,
@@ -159,7 +185,7 @@ shape as R LESYMAP.
 - `tests/test_svr_r_comparison.py::TestTinyTrueRLSMSVRReference` now compares
   Python `lsm_svr()` against true R `lsm_svr()` outputs on a small generated
   fixture for both linear and default RBF kernels. This runs in the default test
-  suite and checks statistic vectors plus valid R permutation p-values.
+  suite and checks statistic vectors plus valid permutation p-value outputs.
 - `tests/test_svr_r_comparison.py::TestTrueRLSMSVRReference` now compares
   Python `lsm_svr()` against large true R `lsm_svr()` statistic vectors for
   both linear and default RBF kernels. The fixture set includes compressed
@@ -170,11 +196,13 @@ shape as R LESYMAP.
 
 ### What Is Not Yet Strictly Verified
 
-- Large-fixture R permutation p-values are not yet reproduced by Python
-  `lsm_svr()`. The current true-R tests verify statistic-map parity and only
-  check that the R p-values are valid probabilities.
-- R output object metadata beyond statistic vectors and valid p-value ranges
-  still needs fixture comparison if exact R object parity becomes required.
+- Python implements the same SVR permutation p-value rule as R, but exact
+  p-value equality to saved R fixtures is not claimed because R `sample()` and
+  NumPy permutation do not generate the same permutation sequence unless that
+  sequence is saved and replayed. The current fixtures still use statistic-map
+  parity as the strict R-vs-Python criterion and validate p-value shape/range.
+- R output object metadata beyond statistic vectors and p-value semantics still
+  needs fixture comparison if exact R object parity becomes required.
 
 ## Real Test Data E2E
 
@@ -224,7 +252,5 @@ sparseness matching is required beyond bounded-objective compatibility.
 
 ## Remaining Validation Checklist
 
-- Decide whether to implement Python-side SVR permutation p-value images that
-  match R `lsm_svr()` or keep p-values out of the Python prediction API scope.
 - Optionally generate full-size SCCAN CV-sparseness fixtures with
   `RUN_SCCAN_CV=1` if exact default-data CV behavior is required.
