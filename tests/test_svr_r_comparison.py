@@ -115,10 +115,7 @@ def r_data():
     if not FIXTURES_DIR.exists():
         pytest.skip("R reference data not found. Run generate_r_svr_reference.R first.")
 
-    try:
-        return load_r_reference_data()
-    except Exception as e:
-        pytest.skip(f"Failed to load R reference data: {e}")
+    return load_r_reference_data()
 
 
 @pytest.fixture(scope="module")
