@@ -20,15 +20,15 @@ Fresh verification on `main` after merge:
 
 ```text
 pytest -q
-115 passed, 15 deselected, 266 warnings in 7.63s
+117 passed, 16 deselected, 272 warnings in 6.66s
 pytest -q tests/test_prediction_roundtrip.py tests/test_multivariate_perf_controls.py
 18 passed, 40 warnings in 1.90s
 pytest -q -m slow tests/test_testdata_prediction_e2e.py -rs
 2 passed, 4 warnings in 8.24s
 pytest -q tests/test_sccan_r_comparison.py
-12 passed, 2 deselected, 28 warnings in 1.29s
+26 passed, 2 deselected, 60 warnings in 1.91s
 pytest -q -m slow tests/test_sccan_r_comparison.py::TestTinySCCANCVReference::test_python_r_bounded_sccan_cv_runs_on_tiny_r_fixture -rs
-1 passed, 2 warnings in 1.75s
+1 passed, 2 warnings in 1.82s
 pytest -q -m slow tests/test_svr_r_comparison.py::TestPythonLSMSVREndToEnd
 2 passed, 5 warnings in 98.17s (0:01:38)
 pytest -q -m slow tests/test_svr_r_comparison.py
