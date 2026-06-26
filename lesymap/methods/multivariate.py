@@ -23,6 +23,7 @@ from sklearn.svm import SVR
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold
+from scipy.optimize import minimize_scalar
 from scipy.stats import pearsonr, t as t_dist, rankdata
 import scipy.ndimage as ndimage
 from joblib import Parallel, delayed
@@ -180,6 +181,11 @@ def lsm_sccan(lesmat: np.ndarray,
               directional_sccan: bool = True,
               min_cluster_size: Optional[int] = None,
               sparseness_range: Optional[List[float]] = None,
+              sparseness_optimization_method: str = 'grid',
+              sparseness_penalty: float = 0.03,
+              lower_sparseness: float = -0.9,
+              upper_sparseness: float = 0.9,
+              optimization_tolerance: float = 0.03,
               n_jobs: int = 1,
               robust_rank_fallback: str = 'auto',
               show_info: bool = True,
@@ -234,6 +240,16 @@ def lsm_sccan(lesmat: np.ndarray,
         Minimum cluster size for post-processing (defaults to cthresh)
     sparseness_range : list of float, optional
         Sparseness grid to test during optimization
+    sparseness_optimization_method : {'grid', 'r_bounded'}
+        Optimization strategy. ``grid`` preserves the existing Python behavior;
+        ``r_bounded`` uses R LESYMAP's bounded objective with a sparseness
+        penalty.
+    sparseness_penalty : float
+        Penalty applied to absolute sparseness in ``r_bounded`` mode.
+    lower_sparseness, upper_sparseness : float
+        Search interval for ``r_bounded`` mode.
+    optimization_tolerance : float
+        Bounded optimization tolerance for ``r_bounded`` mode.
     n_jobs : int
         Number of parallel jobs for sparseness optimization
     robust_rank_fallback : {'auto', 'never', 'force'}
@@ -298,6 +314,7 @@ def lsm_sccan(lesmat: np.ndarray,
     cv_correlation_stat = None
     cv_correlation_pval = None
     optimal_sparseness = sparseness
+    optimal_sparseness_signed = sparseness
 
     if optimize_sparseness or validate_sparseness:
         if show_info:
@@ -323,16 +340,22 @@ def lsm_sccan(lesmat: np.ndarray,
             just_validate=validate_sparseness,
             directional_sccan=directional_sccan,
             sparseness_range=sparseness_range,
+            optimization_method=sparseness_optimization_method,
+            sparseness_penalty=sparseness_penalty,
+            lower_sparseness=lower_sparseness,
+            upper_sparseness=upper_sparseness,
+            optimization_tolerance=optimization_tolerance,
             n_jobs=n_jobs,
             antspyt=antspyt,
             robust_rank_fallback=robust_rank_fallback,
         )
 
         optimal_sparseness = cv_result['optimal_sparseness']
+        optimal_sparseness_signed = cv_result.get('optimal_sparseness_signed', optimal_sparseness)
         cv_correlation_stat = cv_result['cv_correlation']
         cv_robust_info = cv_result.get('robust_info', {})
         actual_sparseness_range = cv_result.get('sparseness_range', sparseness_range)
-        sparseness_vec = [optimal_sparseness, sparseness_behav]
+        sparseness_vec = [optimal_sparseness_signed, sparseness_behav]
 
         # Compute p-value for CV correlation
         # R: tstat = (r*sqrt(n-2))/(sqrt(1 - r^2))
@@ -372,11 +395,14 @@ def lsm_sccan(lesmat: np.ndarray,
                 method='sccan',
                 model_params={
                     'sparseness': optimal_sparseness,
+                    'sparseness_signed': optimal_sparseness_signed,
                     'robust': robust,
                     'robust_rank_fallback_policy': robust_rank_fallback,
                     'cv_correlation': cv_correlation_stat,
                     'cv_pvalue': cv_correlation_pval,
                     'sparseness_range': actual_sparseness_range,
+                    'sparseness_optimization_method': cv_result.get('optimization_method'),
+                    'sparseness_penalty': cv_result.get('sparseness_penalty'),
                     'null_result': True,
                     **cv_robust_info,
                 },
@@ -535,6 +561,7 @@ def lsm_sccan(lesmat: np.ndarray,
         sccan_predict_lm=calibrate_lm,
         model_params={
             'sparseness': optimal_sparseness,
+            'sparseness_signed': optimal_sparseness_signed,
             'nvecs': nvecs,
             'its': its,
             'smooth': smooth,
@@ -553,6 +580,8 @@ def lsm_sccan(lesmat: np.ndarray,
             'cv_correlation': cv_correlation_stat,
             'cv_pvalue': cv_correlation_pval,
             'sparseness_range': actual_sparseness_range,
+            'sparseness_optimization_method': cv_result.get('optimization_method') if (optimize_sparseness or validate_sparseness) else None,
+            'sparseness_penalty': cv_result.get('sparseness_penalty') if (optimize_sparseness or validate_sparseness) else None,
             'n_jobs': n_jobs,
             **cv_robust_info,
             **robust_info,
@@ -778,6 +807,11 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
                                just_validate: bool = False,
                                directional_sccan: bool = True,
                                sparseness_range: List[float] = None,
+                               optimization_method: str = 'grid',
+                               sparseness_penalty: float = 0.03,
+                               lower_sparseness: float = -0.9,
+                               upper_sparseness: float = 0.9,
+                               optimization_tolerance: float = 0.03,
                                n_folds: int = 4,
                                n_reps: int = 1,
                                n_jobs: int = 1,
@@ -824,6 +858,16 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
         Whether to allow directional weights
     sparseness_range : list of float
         Sparseness values to try
+    optimization_method : {'grid', 'r_bounded'}
+        Optimization strategy. ``grid`` chooses the highest CV correlation from
+        ``sparseness_range``. ``r_bounded`` mirrors R LESYMAP's bounded
+        objective: minimize ``1 - (CVcorr - abs(sparseness) * penalty)``.
+    sparseness_penalty : float
+        Penalty used by ``r_bounded``.
+    lower_sparseness, upper_sparseness : float
+        Bounded search interval for ``r_bounded``.
+    optimization_tolerance : float
+        Tolerance for bounded search.
     n_folds : int
         Number of CV folds
     n_reps : int
@@ -848,12 +892,25 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
             "ANTsPy not available for sparseness optimization. "
             "Using default sparseness=0.045."
         )
-        return {'optimal_sparseness': 0.045, 'cv_correlation': np.nan}
+        return {
+            'optimal_sparseness': 0.045,
+            'optimal_sparseness_signed': -0.045 if directional_sccan else 0.045,
+            'cv_correlation': np.nan,
+            'sparseness_range': sparseness_range,
+            'optimization_method': optimization_method,
+            'sparseness_penalty': sparseness_penalty,
+            'evaluated_sparseness': [],
+        }
 
     if cthresh is None:
         cthresh = [150, 0]
 
     robust_rank_fallback = _normalize_robust_rank_fallback(robust_rank_fallback)
+    if optimization_method not in {'grid', 'r_bounded'}:
+        raise ValueError(
+            "optimization_method must be 'grid' or 'r_bounded', "
+            f"got {optimization_method!r}"
+        )
 
     # Default sparseness range (as in R: use negative for directional)
     if sparseness_range is None:
@@ -870,6 +927,10 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
             sparseness_range = [-sparseness]
 
     inmask = [None, None]
+
+    if optimization_method == 'r_bounded' and not directional_sccan:
+        lower_sparseness = max(lower_sparseness, 0.005)
+        upper_sparseness = max(upper_sparseness, lower_sparseness)
 
     best_sparseness = sparseness_range[0]
     best_correlation = -np.inf
@@ -932,12 +993,38 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
         mean_corr = np.mean(cv_correlations)
         return test_sparseness, mean_corr, robust_infos
 
-    if n_jobs == 1 or len(sparseness_range) == 1:
-        grid_results = [evaluate_sparseness(s) for s in sparseness_range]
+    if just_validate or optimization_method == 'grid':
+        if n_jobs == 1 or len(sparseness_range) == 1:
+            grid_results = [evaluate_sparseness(s) for s in sparseness_range]
+        else:
+            grid_results = Parallel(n_jobs=n_jobs, prefer='threads')(
+                delayed(evaluate_sparseness)(s) for s in sparseness_range
+            )
     else:
-        grid_results = Parallel(n_jobs=n_jobs, prefer='threads')(
-            delayed(evaluate_sparseness)(s) for s in sparseness_range
+        bounded_results = []
+
+        def objective(test_sparseness):
+            test_sparseness, mean_corr, robust_infos = evaluate_sparseness(test_sparseness)
+            bounded_results.append((test_sparseness, mean_corr, robust_infos))
+            if not np.isfinite(mean_corr):
+                return np.inf
+            return 1.0 - (mean_corr - (abs(test_sparseness) * sparseness_penalty))
+
+        opt_result = minimize_scalar(
+            objective,
+            bounds=(lower_sparseness, upper_sparseness),
+            method='bounded',
+            options={'xatol': optimization_tolerance},
         )
+        if not bounded_results or not any(
+            np.isclose(row[0], opt_result.x, atol=optimization_tolerance)
+            for row in bounded_results
+        ):
+            objective(opt_result.x)
+        grid_results = bounded_results
+
+    if not grid_results:
+        grid_results = [evaluate_sparseness(s) for s in sparseness_range]
 
     all_robust_infos = [
         info
@@ -971,7 +1058,18 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
         if show_info and not just_validate:
             print(f"    Sparseness={test_sparseness:.3f}: CV correlation={mean_corr:.4f}")
 
-        if np.isfinite(mean_corr) and mean_corr > best_correlation:
+        if not np.isfinite(mean_corr):
+            continue
+        if optimization_method == 'r_bounded' and not just_validate:
+            score = mean_corr - (abs(test_sparseness) * sparseness_penalty)
+            best_score = (
+                best_correlation - (abs(best_sparseness) * sparseness_penalty)
+                if np.isfinite(best_correlation) else -np.inf
+            )
+            if score > best_score:
+                best_correlation = mean_corr
+                best_sparseness = test_sparseness
+        elif mean_corr > best_correlation:
             best_correlation = mean_corr
             best_sparseness = test_sparseness
 
@@ -981,8 +1079,12 @@ def _optimize_sccan_sparseness(lesmat: np.ndarray,
     # Return absolute value of sparseness
     return {
         'optimal_sparseness': abs(best_sparseness),
+        'optimal_sparseness_signed': best_sparseness,
         'cv_correlation': best_correlation,
         'sparseness_range': sparseness_range,
+        'optimization_method': optimization_method,
+        'sparseness_penalty': sparseness_penalty,
+        'evaluated_sparseness': [row[0] for row in grid_results],
         'robust_info': cv_robust_info,
     }
 

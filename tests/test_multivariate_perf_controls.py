@@ -57,7 +57,12 @@ def test_lsm_sccan_passes_sparseness_range_and_n_jobs_to_optimizer(monkeypatch):
     def fake_optimize(*args, **kwargs):
         seen['sparseness_range'] = kwargs.get('sparseness_range')
         seen['n_jobs'] = kwargs.get('n_jobs')
-        return {'optimal_sparseness': 0.2, 'cv_correlation': 0.99}
+        seen['optimization_method'] = kwargs.get('optimization_method')
+        return {
+            'optimal_sparseness': 0.2,
+            'optimal_sparseness_signed': -0.2,
+            'cv_correlation': 0.99,
+        }
 
     monkeypatch.setattr(multivariate, '_import_antspy', lambda: fake_antspy)
     monkeypatch.setattr(multivariate, '_optimize_sccan_sparseness', fake_optimize)
@@ -79,13 +84,20 @@ def test_lsm_sccan_passes_sparseness_range_and_n_jobs_to_optimizer(monkeypatch):
         _mask_img(3),
         optimize_sparseness=True,
         sparseness_range=[0.1, 0.2],
+        sparseness_optimization_method='r_bounded',
         n_jobs=2,
         min_cluster_size=0,
         show_info=False,
     )
 
-    assert seen == {'sparseness_range': [0.1, 0.2], 'n_jobs': 2}
+    assert seen == {
+        'sparseness_range': [0.1, 0.2],
+        'n_jobs': 2,
+        'optimization_method': 'r_bounded',
+    }
     assert result.model_params['sparseness'] == 0.2
+    assert result.model_params['sparseness_signed'] == -0.2
+    assert fake_antspy.calls[-1]['sparseness'][0] == -0.2
 
 
 def test_optimize_sccan_sparseness_accepts_parallel_n_jobs_with_fake_antspy():
@@ -118,6 +130,64 @@ def test_optimize_sccan_sparseness_accepts_parallel_n_jobs_with_fake_antspy():
     assert len(fake_antspy.calls) == 6
 
 
+def test_optimize_sccan_sparseness_r_bounded_uses_penalized_objective(monkeypatch):
+    class SparsenessSensitiveAntsPy(FakeAntsPy):
+        def sparse_decom2(self, inmats, **kwargs):
+            self.calls.append(kwargs)
+            n_features = inmats[0].shape[1]
+            sparse = abs(float(kwargs['sparseness'][0]))
+            weights = np.full(n_features, sparse)
+            return {
+                'eig1': weights,
+                'eig2': np.array([1.0]),
+                'ccasummary': {'corrs': [sparse]},
+            }
+
+    def fake_minimize_scalar(objective, bounds, method, options):
+        assert method == 'bounded'
+        assert bounds == (-0.2, -0.05)
+        assert options == {'xatol': 0.01}
+        objective(-0.2)
+        objective(-0.05)
+        return type('Result', (), {'x': -0.05})()
+
+    monkeypatch.setattr(multivariate, 'minimize_scalar', fake_minimize_scalar)
+
+    lesmat = np.array(
+        [
+            [1, 0],
+            [0, 1],
+            [1, 1],
+            [0, 0],
+            [1, 0],
+            [0, 1],
+        ],
+        dtype=float,
+    )
+    behavior = np.array([0.2, 0.3, 0.9, 0.1, 0.7, 0.4])
+
+    result = multivariate._optimize_sccan_sparseness(
+        lesmat,
+        behavior,
+        optimization_method='r_bounded',
+        lower_sparseness=-0.2,
+        upper_sparseness=-0.05,
+        optimization_tolerance=0.01,
+        sparseness_penalty=10.0,
+        n_folds=3,
+        n_reps=1,
+        antspyt=SparsenessSensitiveAntsPy(),
+        robust=0,
+        show_info=False,
+    )
+
+    assert result['optimization_method'] == 'r_bounded'
+    assert result['sparseness_penalty'] == 10.0
+    assert result['optimal_sparseness'] == 0.05
+    assert result['optimal_sparseness_signed'] == -0.05
+    assert set(np.round(np.abs(result['evaluated_sparseness']), 2)) == {0.05, 0.2}
+
+
 def test_non_linear_svr_requires_feature_limit_for_default_permutation_importance():
     lesmat = np.array(
         [
@@ -147,6 +217,11 @@ def test_public_pipeline_allows_new_multivariate_parameters():
         'robust',
         'robust_rank_fallback',
         'max_based',
+        'sparseness_optimization_method',
+        'sparseness_penalty',
+        'lower_sparseness',
+        'upper_sparseness',
+        'optimization_tolerance',
     } <= VALID_METHOD_PARAMS['sccan']
     assert {'n_perm', 'max_features'} <= VALID_METHOD_PARAMS['svr']
 

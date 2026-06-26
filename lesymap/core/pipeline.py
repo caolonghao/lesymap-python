@@ -36,7 +36,9 @@ VALID_METHOD_PARAMS = {
     'sccan': {
         'optimize_sparseness', 'sparseness', 'nvecs', 'cthresh',
         'its', 'smooth', 'cluster_threshold', 'sparseness_range', 'n_jobs',
-        'robust', 'robust_rank_fallback', 'min_cluster_size', 'max_based'
+        'robust', 'robust_rank_fallback', 'min_cluster_size', 'max_based',
+        'sparseness_optimization_method', 'sparseness_penalty',
+        'lower_sparseness', 'upper_sparseness', 'optimization_tolerance'
     },
     'svr': {
         'C', 'kernel', 'epsilon', 'gamma', 'degree', 'coef0', 'n_perm',

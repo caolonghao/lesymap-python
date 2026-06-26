@@ -1,0 +1,2 @@
+"seed","n_subjects","n_voxels","n_folds","cv_repetitions","lower_sparseness","upper_sparseness","tolerance","robust","its","cthresh","smooth","sparseness_penalty","r_minimum","r_optimal_sparseness","r_objective","r_cv_correlation","lesymap_version","antsr_version"
+7,18,24,3,1,-0.2,-0.01,0.08,0,5,0,0,0.03,-0.15514708427504,0.15514708427504,0.506876454414742,0.497777958113509,"0.0.0.9221","0.5.7.5"

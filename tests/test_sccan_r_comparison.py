@@ -31,7 +31,7 @@ import nibabel as nib
 from pathlib import Path
 from scipy.stats import pearsonr
 
-from lesymap.methods.multivariate import lsm_sccan
+from lesymap.methods.multivariate import lsm_sccan, _optimize_sccan_sparseness
 
 # Path to R reference data
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "r_reference_results"
@@ -102,6 +102,15 @@ def load_r_reference_data():
     data['statistic'] = pd.read_csv(FIXTURES_DIR / "test1_statistic.csv")['statistic'].values
 
     return data
+
+
+def load_r_sccan_cv_tiny_data():
+    """Load tiny R SCCAN CV optimization fixture."""
+    return {
+        'lesmat': pd.read_csv(FIXTURES_DIR / "sccan_cv_tiny_lesmat.csv").values,
+        'behavior': pd.read_csv(FIXTURES_DIR / "sccan_cv_tiny_behavior.csv")['behavior'].values,
+        'results': pd.read_csv(FIXTURES_DIR / "sccan_cv_tiny_results.csv").iloc[0],
+    }
 
 
 @pytest.fixture(scope="module")
@@ -179,6 +188,23 @@ def sccan_rerun_data(r_data):
         "mask_img": mask_img,
         "predictions": predictions,
     }
+
+
+@pytest.fixture(scope="module")
+def sccan_cv_tiny_data():
+    required = [
+        "sccan_cv_tiny_lesmat.csv",
+        "sccan_cv_tiny_behavior.csv",
+        "sccan_cv_tiny_results.csv",
+    ]
+    missing = [f for f in required if not (FIXTURES_DIR / f).exists()]
+    if missing:
+        pytest.skip(
+            "Missing tiny SCCAN CV fixtures: "
+            + ", ".join(missing)
+            + ". Run tests/generate_r_sccan_cv_tiny_reference.R first."
+        )
+    return load_r_sccan_cv_tiny_data()
 
 
 class TestScalingBehavior:
@@ -377,6 +403,59 @@ class TestPredictionWorkflow:
         assert np.isfinite(pred_calibrated), "Calibrated prediction should be finite"
 
         print("PASS: Prediction formula produces valid results")
+
+
+class TestTinySCCANCVReference:
+    """Validate the tiny R SCCAN CV sparseness fixture and Python bounded mode."""
+
+    def test_tiny_r_sccan_cv_fixture_values(self, sccan_cv_tiny_data):
+        results = sccan_cv_tiny_data['results']
+
+        assert sccan_cv_tiny_data['lesmat'].shape == (
+            int(results['n_subjects']),
+            int(results['n_voxels']),
+        )
+        assert len(sccan_cv_tiny_data['behavior']) == int(results['n_subjects'])
+        assert results['seed'] == 7
+        assert results['n_folds'] == 3
+        assert results['cv_repetitions'] == 1
+        assert results['r_minimum'] < 0
+        assert 0 < results['r_optimal_sparseness'] < 1
+        assert 0 <= results['r_cv_correlation'] <= 1
+
+    @pytest.mark.slow
+    def test_python_r_bounded_sccan_cv_runs_on_tiny_r_fixture(self, sccan_cv_tiny_data):
+        pytest.importorskip("ants")
+
+        lesmat = sccan_cv_tiny_data['lesmat']
+        behavior = sccan_cv_tiny_data['behavior']
+        results = sccan_cv_tiny_data['results']
+
+        cv_result = _optimize_sccan_sparseness(
+            lesmat,
+            behavior,
+            optimization_method='r_bounded',
+            lower_sparseness=float(results['lower_sparseness']),
+            upper_sparseness=float(results['upper_sparseness']),
+            optimization_tolerance=float(results['tolerance']),
+            sparseness_penalty=float(results['sparseness_penalty']),
+            n_folds=int(results['n_folds']),
+            n_reps=int(results['cv_repetitions']),
+            robust=int(results['robust']),
+            its=int(results['its']),
+            cthresh=[int(results['cthresh']), 0],
+            smooth=float(results['smooth']),
+            directional_sccan=True,
+            robust_rank_fallback='auto',
+            show_info=False,
+        )
+
+        assert cv_result['optimization_method'] == 'r_bounded'
+        assert cv_result['sparseness_penalty'] == results['sparseness_penalty']
+        assert cv_result['optimal_sparseness'] > 0
+        assert cv_result['optimal_sparseness_signed'] < 0
+        assert np.isfinite(cv_result['cv_correlation'])
+        assert len(cv_result['evaluated_sparseness']) >= 2
 
 
 @pytest.mark.slow
