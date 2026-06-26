@@ -375,14 +375,20 @@ class TestTinyTrueRLSMSVRReference:
             kernel='linear',
             C=1.0,
             epsilon=0.1,
+            svr_pvalue_method='r_permutation',
+            nperm=1,
+            random_state=123,
             show_info=False,
         )
 
         r_statistic = tiny_lsm_svr_data['linear']['statistic'].values
         r_pvalue = tiny_lsm_svr_data['linear']['pvalue'].values
         py_statistic = result.stat_img.get_fdata().reshape(-1)
+        py_pvalue = result.pval_img.get_fdata().reshape(-1)
 
         np.testing.assert_allclose(py_statistic, r_statistic, rtol=1e-8, atol=1e-8)
+        assert py_pvalue.shape == r_pvalue.shape
+        assert np.all((py_pvalue >= 0.5) & (py_pvalue <= 1))
         assert np.all((r_pvalue >= 0) & (r_pvalue <= 1))
 
     def test_lsm_svr_rbf_matches_tiny_true_r_lsm_svr(self, tiny_lsm_svr_data):
@@ -394,14 +400,20 @@ class TestTinyTrueRLSMSVRReference:
             behavior,
             _vector_mask(lesmat.shape[1]),
             r_compatible=True,
+            svr_pvalue_method='r_permutation',
+            nperm=1,
+            random_state=123,
             show_info=False,
         )
 
         r_statistic = tiny_lsm_svr_data['radial']['statistic'].values
         r_pvalue = tiny_lsm_svr_data['radial']['pvalue'].values
         py_statistic = result.stat_img.get_fdata().reshape(-1)
+        py_pvalue = result.pval_img.get_fdata().reshape(-1)
 
         np.testing.assert_allclose(py_statistic, r_statistic, rtol=1e-8, atol=1e-8)
+        assert py_pvalue.shape == r_pvalue.shape
+        assert np.all((py_pvalue >= 0.5) & (py_pvalue <= 1))
         assert np.all((r_pvalue >= 0) & (r_pvalue <= 1))
 
 

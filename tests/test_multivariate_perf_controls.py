@@ -223,6 +223,11 @@ def test_public_pipeline_allows_new_multivariate_parameters():
         'upper_sparseness',
         'optimization_tolerance',
     } <= VALID_METHOD_PARAMS['sccan']
+    assert {
+        'compute_pvalues',
+        'svr_pvalue_method',
+        'random_state',
+    } <= VALID_METHOD_PARAMS['svr']
     assert {'n_perm', 'max_features'} <= VALID_METHOD_PARAMS['svr']
 
 
