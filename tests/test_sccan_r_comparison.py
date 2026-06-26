@@ -127,7 +127,7 @@ def r_data():
 
 
 @pytest.fixture(scope="module")
-def sccan_rerun_data():
+def sccan_rerun_data(r_data):
     """Load full SCCAN rerun inputs only for the slow end-to-end comparison."""
     lesmat_path = next(
         (
@@ -142,6 +142,7 @@ def sccan_rerun_data():
         "behavior": FIXTURES_DIR / "sccan_behavior.csv",
         "mask_img": FIXTURES_DIR / "mask.nii.gz",
         "predictions": FIXTURES_DIR / "test4_predictions.csv",
+        "dims": FIXTURES_DIR / "lesmat_dims.csv",
     }
     missing = [key for key, path in required_paths.items() if path is None or not path.exists()]
     if missing:
@@ -152,14 +153,32 @@ def sccan_rerun_data():
         )
 
     try:
-        return {
-            "lesmat": pd.read_csv(required_paths["lesmat"]).values,
-            "behavior": pd.read_csv(required_paths["behavior"])["behavior"].values,
-            "mask_img": nib.load(required_paths["mask_img"]),
-            "predictions": pd.read_csv(required_paths["predictions"]),
-        }
+        lesmat = pd.read_csv(required_paths["lesmat"]).values
+        behavior = pd.read_csv(required_paths["behavior"])["behavior"].values
+        mask_img = nib.load(required_paths["mask_img"])
+        predictions = pd.read_csv(required_paths["predictions"])
+        dims = pd.read_csv(required_paths["dims"]).iloc[0]
     except Exception as e:
         pytest.skip(f"Failed to load SCCAN rerun fixtures: {e}")
+
+    n_subjects = int(dims["n_subjects"])
+    n_voxels = int(dims["n_voxels"])
+    mask_voxels = int(np.count_nonzero(mask_img.get_fdata() > 0))
+
+    assert lesmat.shape == (n_subjects, n_voxels)
+    assert len(behavior) == n_subjects
+    assert len(predictions) == n_subjects
+    assert "pred_calibrated" in predictions
+    assert mask_voxels == n_voxels
+    assert len(r_data["statistic"]) == n_voxels
+    assert len(r_data["eig1_raw"]) == n_voxels
+
+    return {
+        "lesmat": lesmat,
+        "behavior": behavior,
+        "mask_img": mask_img,
+        "predictions": predictions,
+    }
 
 
 class TestScalingBehavior:
@@ -404,13 +423,23 @@ class TestPythonLSMSCCANEndToEnd:
 
         stat_corr, _ = pearsonr(py_statistic, r_statistic)
         aligned_stat_corr = abs(stat_corr)
+        py_support = py_statistic != 0
+        r_support = r_statistic != 0
+        support_union = py_support | r_support
+        support_intersection = py_support & r_support
+        union_stat_corr = abs(pearsonr(py_statistic[support_union], r_statistic[support_union])[0])
+        intersection_stat_corr = abs(
+            pearsonr(py_statistic[support_intersection], r_statistic[support_intersection])[0]
+        )
         pred_corr, _ = pearsonr(py_predictions, r_predictions)
 
         assert result.model_params['robust'] == 1
         # SCCAN/CCA eigenvectors can differ by a global sign while preserving
         # the same prediction after the saved calibration model is applied.
         assert aligned_stat_corr > 0.75
-        assert pred_corr > 0.75
+        assert union_stat_corr > 0.5
+        assert intersection_stat_corr > 0.9
+        assert pred_corr > 0.95
         assert abs(np.count_nonzero(py_statistic) - np.count_nonzero(r_statistic)) / len(r_statistic) < 0.1
 
 

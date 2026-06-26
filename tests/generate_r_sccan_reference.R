@@ -270,11 +270,6 @@ write.csv(
   file.path(output_dir, "sccan_behavior.csv"),
   row.names = FALSE
 )
-write.csv(
-  data.frame(mask = as.numeric(as.array(mask) > 0)),
-  file.path(output_dir, "sccan_mask_vector.csv"),
-  row.names = FALSE
-)
 
 # Save lesion matrix dimensions
 write.csv(

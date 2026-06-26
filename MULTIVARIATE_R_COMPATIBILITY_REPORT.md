@@ -43,16 +43,19 @@ pytest -q -m slow tests/test_sccan_r_comparison.py::TestPythonLSMSCCANEndToEnd
   Docker image. `tests/test_sccan_r_comparison.py::TestPythonLSMSCCANEndToEnd`
   now runs Python `lsm_sccan()` on the same R input matrix and mask.
 - The SCCAN slow comparison passes: calibrated prediction correlation is about
-  0.998 against R predictions, and the statistic map has high sign-aligned
-  spatial correlation. The sign alignment is intentional because CCA/SCCAN
-  eigenvectors are identifiable only up to a global sign.
+  0.998 against R predictions. The statistic map has high full-mask
+  sign-aligned correlation, but nonzero-support agreement is looser; this is
+  reported as coarse map agreement rather than exact map parity. The sign
+  alignment is intentional because CCA/SCCAN eigenvectors are identifiable only
+  up to a global sign.
 
 ### What Is Not Yet Strictly Verified
 
-- SCCAN fixed-sparseness prediction and map behavior is now covered by true
-  R-vs-Python fixtures. CV-selected sparseness remains optional because the R
-  CV generator is slow; run `RUN_SCCAN_CV=1 tests/generate_r_sccan_reference.R`
-  when CV fixtures are specifically needed.
+- SCCAN fixed-sparseness prediction behavior and coarse map agreement are now
+  covered by true R-vs-Python fixtures. CV-selected sparseness remains optional
+  because the R CV generator is slow; run
+  `RUN_SCCAN_CV=1 tests/generate_r_sccan_reference.R` when CV fixtures are
+  specifically needed.
 - Exact SCCAN statistic equality is not expected because ANTsR and ANTsPy can
   differ in robust-rank implementation and CCA sign orientation. Current gating
   uses prediction correlation and sign-aligned spatial correlation.
