@@ -274,13 +274,13 @@ class LesymapResult:
 
         return result
 
-    def predict(self, new_lesions: Union[List[str], List[nib.Nifti1Image]]) -> np.ndarray:
+    def predict(self, new_lesions: List[Union[str, Path, nib.Nifti1Image]]) -> np.ndarray:
         """
         Predict behavioral scores for new lesion maps.
 
         Parameters
         ----------
-        new_lesions : list of str or nibabel images
+        new_lesions : list of str, pathlib.Path, or nibabel images
             New lesion maps (must be in same template space as training data)
 
         Returns
@@ -314,7 +314,7 @@ class LesymapResult:
                 "Supported methods are: sccan, svr, regres, regresfast"
             )
 
-    def _predict_sccan(self, new_lesions: Union[List[str], List[nib.Nifti1Image]]) -> np.ndarray:
+    def _predict_sccan(self, new_lesions: List[Union[str, Path, nib.Nifti1Image]]) -> np.ndarray:
         """
         SCCAN prediction with linear calibration.
 
@@ -354,7 +354,7 @@ class LesymapResult:
 
         return predictions
 
-    def _predict_svr(self, new_lesions: Union[List[str], List[nib.Nifti1Image]]) -> np.ndarray:
+    def _predict_svr(self, new_lesions: List[Union[str, Path, nib.Nifti1Image]]) -> np.ndarray:
         """SVR prediction using sklearn model."""
         if self.svr_model is None:
             raise ValueError("SVR model not available for prediction")
@@ -368,7 +368,7 @@ class LesymapResult:
             predictions = predictions * self.svr_behavior_scale + self.svr_behavior_center
         return predictions
 
-    def _predict_regression(self, new_lesions: Union[List[str], List[nib.Nifti1Image]]) -> np.ndarray:
+    def _predict_regression(self, new_lesions: List[Union[str, Path, nib.Nifti1Image]]) -> np.ndarray:
         """Linear regression prediction."""
         if self.regression_coef is None:
             raise ValueError("Regression coefficients not available for prediction")
@@ -383,7 +383,7 @@ class LesymapResult:
 
     def _lesions_to_model_matrix(
         self,
-        new_lesions: Union[List[str], List[nib.Nifti1Image]],
+        new_lesions: List[Union[str, Path, nib.Nifti1Image]],
     ) -> np.ndarray:
         """Convert new lesion images into the feature space used by the model."""
         if self.mask_img is None:

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from lesymap import LesymapResult, lesymap
-from lesymap.core.image_utils import images_to_matrix, mask_from_average, matrix_to_image
+from lesymap.core.image_utils import images_to_matrix, mask_from_average
 from lesymap.core.io import load_lesions
 
 
