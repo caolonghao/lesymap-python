@@ -182,3 +182,32 @@ def test_svr_r_compatible_mode_scales_training_and_prediction(tmp_path):
     assert result.svr_behavior_center == np.mean(behavior)
     np.testing.assert_allclose(direct_predictions, expected)
     np.testing.assert_allclose(loaded.predict(images[:3]), direct_predictions)
+
+
+def test_prediction_accepts_pathlike_lesion_inputs(tmp_path):
+    images = _toy_images()
+    behavior = np.array([0.0, 0.2, 0.7, 0.9, 1.1, 0.4], dtype=float)
+    image_paths = []
+    for index, image in enumerate(images):
+        path = tmp_path / f"subject-{index}.nii.gz"
+        nib.save(image, path)
+        image_paths.append(path)
+
+    result = lesymap.lesymap(
+        image_paths,
+        behavior,
+        method="svr",
+        mask=_toy_mask(),
+        no_patch=True,
+        kernel="linear",
+        C=1.0,
+        epsilon=0.01,
+        nperm=0,
+        show_info=False,
+    )
+
+    path_predictions = result.predict(image_paths[:3])
+    string_predictions = result.predict([str(path) for path in image_paths[:3]])
+
+    assert path_predictions.shape == (3,)
+    np.testing.assert_allclose(path_predictions, string_predictions, rtol=0, atol=0)

@@ -411,10 +411,10 @@ class LesymapResult:
         representative_indices = np.asarray(representative_indices, dtype=int)
         return lesmat[:, representative_indices]
 
-    def _load_and_extract(self, img: Union[str, nib.Nifti1Image],
+    def _load_and_extract(self, img: Union[str, Path, nib.Nifti1Image],
                           voxel_indices: tuple) -> np.ndarray:
         """Load image and extract voxel values."""
-        if isinstance(img, str):
+        if isinstance(img, (str, Path)):
             img = nib.load(img)
         data = img.get_fdata()
         return data[voxel_indices]

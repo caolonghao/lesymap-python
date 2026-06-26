@@ -146,6 +146,7 @@ def test_public_pipeline_allows_new_multivariate_parameters():
         'n_jobs',
         'robust',
         'robust_rank_fallback',
+        'max_based',
     } <= VALID_METHOD_PARAMS['sccan']
     assert {'n_perm', 'max_features'} <= VALID_METHOD_PARAMS['svr']
 
