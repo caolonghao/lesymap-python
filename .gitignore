@@ -37,6 +37,7 @@ __pycache__/
 # Large test fixtures (exceed GitHub 100MB limit)
 tests/fixtures/r_reference_results/svr_lesmat.csv
 tests/fixtures/r_reference_results/svr_lesmat_scaled.csv
+test_data/
 
 # Pytest
 .pytest_cache/
